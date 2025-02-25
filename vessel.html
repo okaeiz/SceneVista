@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Caribbean Vessel Customizer</title>
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background-color: #87CEEB; 
+        }
+        canvas { 
+            display: block; 
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-weight: bold;
+            text-shadow: 1px 1px 2px black;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">Caribbean Vessel Customizer<br>Use mouse to rotate, zoom and pan</div>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dat.gui@0.7.7/build/dat.gui.min.js"></script>
+    <script>
+        // Configuration object for the ship
+        const shipConfig = {
+            hull: {
+                color: "#8B4513", // SaddleBrown
+                width: 4,
+                length: 15,
+                height: 4
+            },
+            sails: {
+                color: "#F5F5F5", // WhiteSmoke
+                count: 3,
+                raised: true
+            },
+            cannons: {
+                count: 8,
+                size: 0.3
+            },
+            mortars: {
+                count: 2,
+                size: 0.5
+            },
+            flag: {
+                color: "#8B0000", // Dark red
+                visible: true
+            },
+            waterColor: "#1E90FF", // DodgerBlue
+            oceanVisible: true
+        };
+
+        // Variables
+        let scene, camera, renderer, controls, ship, water;
+        let cannonObjects = [], mortarObjects = [], sailObjects = [], flag;
+
+        // Initialize the scene
+        function init() {
+            // Create scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB); // Sky blue background
+
+            // Create camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(20, 15, 20);
+
+            // Create renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            // Add orbit controls
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.screenSpacePanning = false;
+            controls.minDistance = 10;
+            controls.maxDistance = 50;
+            controls.maxPolarAngle = Math.PI / 2 - 0.1;
+
+            // Add ambient light
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            // Add directional light (sun)
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(10, 20, 10);
+            directionalLight.castShadow = true;
+            directionalLight.shadow.mapSize.width = 2048;
+            directionalLight.shadow.mapSize.height = 2048;
+            scene.add(directionalLight);
+
+            // Create water
+            createWater();
+
+            // Create the ship
+            createShip();
+
+            // Add controls GUI
+            setupGUI();
+
+            // Handle window resize
+            window.addEventListener('resize', onWindowResize, false);
+
+            // Start animation loop
+            animate();
+        }
+
+        // Create the ocean/water plane
+        function createWater() {
+            const waterGeometry = new THREE.PlaneGeometry(1000, 1000);
+            const waterMaterial = new THREE.MeshStandardMaterial({
+                color: shipConfig.waterColor,
+                roughness: 0.2,
+                metalness: 0.8
+            });
+            water = new THREE.Mesh(waterGeometry, waterMaterial);
+            water.rotation.x = -Math.PI / 2;
+            water.position.y = -2;
+            water.receiveShadow = true;
+            water.visible = shipConfig.oceanVisible;
+            scene.add(water);
+        }
+
+        // Create the ship with all components
+        function createShip() {
+            ship = new THREE.Group();
+            scene.add(ship);
+
+            // Create hull
+            createHull();
+            
+            // Create deck
+            createDeck();
+            
+            // Create masts
+            createMasts();
+            
+            // Create sails
+            createSails();
+            
+            // Create cannons
+            createCannons();
+            
+            // Create mortars
+            createMortars();
+            
+            // Create ship details
+            createShipDetails();
+            
+            // Create flag
+            createFlag();
+        }
+
+        // Create ship hull
+        function createHull() {
+            // Main hull body
+            const hullGeometry = new THREE.BoxGeometry(
+                shipConfig.hull.width,
+                shipConfig.hull.height,
+                shipConfig.hull.length
+            );
+            const hullMaterial = new THREE.MeshStandardMaterial({ color: shipConfig.hull.color });
+            const hull = new THREE.Mesh(hullGeometry, hullMaterial);
+            hull.position.y = 0;
+            hull.castShadow = true;
+            hull.receiveShadow = true;
+            ship.add(hull);
+
+            // Hull front taper (bow)
+            const bowGeometry = new THREE.ConeGeometry(shipConfig.hull.width / 2, 4, 4);
+            const bow = new THREE.Mesh(bowGeometry, hullMaterial);
+            bow.rotation.z = Math.PI / 2;
+            bow.rotation.y = Math.PI / 4;
+            bow.position.z = shipConfig.hull.length / 2 + 1;
+            bow.position.y = 0;
+            bow.castShadow = true;
+            bow.receiveShadow = true;
+            ship.add(bow);
+
+            // Hull back taper (stern)
+            const sternGeometry = new THREE.BoxGeometry(shipConfig.hull.width, shipConfig.hull.height + 1, 2);
+            const stern = new THREE.Mesh(sternGeometry, hullMaterial);
+            stern.position.z = -shipConfig.hull.length / 2 - 0.5;
+            stern.position.y = 0.5;
+            stern.castShadow = true;
+            stern.receiveShadow = true;
+            ship.add(stern);
+        }
+
+        // Create ship deck
+        function createDeck() {
+            const deckGeometry = new THREE.BoxGeometry(
+                shipConfig.hull.width - 0.2,
+                0.5,
+                shipConfig.hull.length - 0.2
+            );
+            const deckMaterial = new THREE.MeshStandardMaterial({ color: 0xD2B48C }); // Tan color for deck
+            const deck = new THREE.Mesh(deckGeometry, deckMaterial);
+            deck.position.y = shipConfig.hull.height / 2 + 0.25;
+            deck.castShadow = true;
+            deck.receiveShadow = true;
+            ship.add(deck);
+        }
+
+        // Create masts
+        function createMasts() {
+            const mastMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+            
+            // Create main masts based on sail count
+            for (let i = 0; i < shipConfig.sails.count; i++) {
+                const mastGeometry = new THREE.CylinderGeometry(0.2, 0.2, 12, 8);
+                const mast = new THREE.Mesh(mastGeometry, mastMaterial);
+                mast.position.y = shipConfig.hull.height / 2 + 6;
+                
+                // Position masts along the ship length
+                const zPos = (shipConfig.hull.length / (shipConfig.sails.count + 1)) * (i + 1) - shipConfig.hull.length / 2;
+                mast.position.z = zPos;
+                
+                mast.castShadow = true;
+                ship.add(mast);
+
+                // Add horizontal yard arms for the sails
+                const yardGeometry = new THREE.CylinderGeometry(0.1, 0.1, shipConfig.hull.width * 1.5, 8);
+                const yard = new THREE.Mesh(yardGeometry, mastMaterial);
+                yard.rotation.x = Math.PI / 2;
+                yard.position.y = shipConfig.hull.height / 2 + 8;
+                yard.position.z = zPos;
+                yard.castShadow = true;
+                ship.add(yard);
+            }
+        }
+
+        // Create sails
+        function createSails() {
+            // Clear existing sail objects
+            sailObjects.forEach(sail => ship.remove(sail));
+            sailObjects = [];
+
+            if (!shipConfig.sails.raised) return;
+
+            const sailMaterial = new THREE.MeshStandardMaterial({
+                color: shipConfig.sails.color,
+                side: THREE.DoubleSide
+            });
+            
+            // Create sails for each mast
+            for (let i = 0; i < shipConfig.sails.count; i++) {
+                const sailGeometry = new THREE.PlaneGeometry(shipConfig.hull.width * 1.4, 6);
+                const sail = new THREE.Mesh(sailGeometry, sailMaterial);
+                
+                const zPos = (shipConfig.hull.length / (shipConfig.sails.count + 1)) * (i + 1) - shipConfig.hull.length / 2;
+                sail.position.z = zPos;
+                sail.position.y = shipConfig.hull.height / 2 + 5;
+                sail.rotation.x = Math.PI / 2;
+                
+                sail.castShadow = true;
+                sail.receiveShadow = true;
+                
+                ship.add(sail);
+                sailObjects.push(sail);
+            }
+        }
+
+        // Create cannons
+        function createCannons() {
+            // Clear existing cannon objects
+            cannonObjects.forEach(cannon => ship.remove(cannon));
+            cannonObjects = [];
+            
+            const cannonsPerSide = Math.floor(shipConfig.cannons.count / 2);
+            const spacing = (shipConfig.hull.length - 4) / (cannonsPerSide + 1);
+            
+            // Left side cannons
+            for (let i = 0; i < cannonsPerSide; i++) {
+                const cannonGroup = createCannonModel();
+                cannonGroup.position.x = shipConfig.hull.width / 2 + 0.3;
+                cannonGroup.position.z = (i + 1) * spacing - shipConfig.hull.length / 2 + 2;
+                cannonGroup.position.y = shipConfig.hull.height / 2 + 0.3;
+                cannonGroup.rotation.y = -Math.PI / 2;
+                
+                ship.add(cannonGroup);
+                cannonObjects.push(cannonGroup);
+            }
+            
+            // Right side cannons
+            for (let i = 0; i < shipConfig.cannons.count - cannonsPerSide; i++) {
+                const cannonGroup = createCannonModel();
+                cannonGroup.position.x = -shipConfig.hull.width / 2 - 0.3;
+                cannonGroup.position.z = (i + 1) * spacing - shipConfig.hull.length / 2 + 2;
+                cannonGroup.position.y = shipConfig.hull.height / 2 + 0.3;
+                cannonGroup.rotation.y = Math.PI / 2;
+                
+                ship.add(cannonGroup);
+                cannonObjects.push(cannonGroup);
+            }
+        }
+
+        // Create a single cannon model
+        function createCannonModel() {
+            const cannonGroup = new THREE.Group();
+            
+            // Cannon barrel
+            const barrelGeometry = new THREE.CylinderGeometry(
+                shipConfig.cannons.size, 
+                shipConfig.cannons.size, 
+                1.5, 8
+            );
+            const barrelMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
+            const barrel = new THREE.Mesh(barrelGeometry, barrelMaterial);
+            barrel.rotation.x = Math.PI / 2;
+            barrel.castShadow = true;
+            cannonGroup.add(barrel);
+            
+            // Cannon wheels
+            const wheelGeometry = new THREE.CylinderGeometry(0.2, 0.2, 0.8, 8);
+            const wheelMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+            
+            const wheel1 = new THREE.Mesh(wheelGeometry, wheelMaterial);
+            wheel1.rotation.z = Math.PI / 2;
+            wheel1.position.y = -0.3;
+            wheel1.position.x = 0.3;
+            wheel1.castShadow = true;
+            cannonGroup.add(wheel1);
+            
+            const wheel2 = new THREE.Mesh(wheelGeometry, wheelMaterial);
+            wheel2.rotation.z = Math.PI / 2;
+            wheel2.position.y = -0.3;
+            wheel2.position.x = -0.3;
+            wheel2.castShadow = true;
+            cannonGroup.add(wheel2);
+            
+            return cannonGroup;
+        }
+
+        // Create mortars
+        function createMortars() {
+            // Clear existing mortar objects
+            mortarObjects.forEach(mortar => ship.remove(mortar));
+            mortarObjects = [];
+            
+            if (shipConfig.mortars.count <= 0) return;
+            
+            // Distribute mortars along the center line of the ship
+            const spacing = shipConfig.hull.length / (shipConfig.mortars.count + 1);
+            
+            for (let i = 0; i < shipConfig.mortars.count; i++) {
+                const mortarGroup = createMortarModel();
+                mortarGroup.position.z = (i + 1) * spacing - shipConfig.hull.length / 2;
+                mortarGroup.position.y = shipConfig.hull.height / 2 + 0.5;
+                
+                ship.add(mortarGroup);
+                mortarObjects.push(mortarGroup);
+            }
+        }
+
+        // Create a single mortar model
+        function createMortarModel() {
+            const mortarGroup = new THREE.Group();
+            
+            // Mortar base
+            const baseGeometry = new THREE.CylinderGeometry(
+                shipConfig.mortars.size + 0.2, 
+                shipConfig.mortars.size + 0.3, 
+                0.4, 8
+            );
+            const baseMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+            const base = new THREE.Mesh(baseGeometry, baseMaterial);
+            base.castShadow = true;
+            mortarGroup.add(base);
+            
+            // Mortar barrel
+            const barrelGeometry = new THREE.CylinderGeometry(
+                shipConfig.mortars.size, 
+                shipConfig.mortars.size + 0.1, 
+                1, 8
+            );
+            const barrelMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
+            const barrel = new THREE.Mesh(barrelGeometry, barrelMaterial);
+            barrel.position.y = 0.6;
+            barrel.rotation.x = Math.PI / 6; // Angle up slightly
+            barrel.castShadow = true;
+            mortarGroup.add(barrel);
+            
+            return mortarGroup;
+        }
+        
+        // Create flag
+        function createFlag() {
+            if (flag) ship.remove(flag);
+            
+            if (!shipConfig.flag.visible) return;
+            
+            const flagGeometry = new THREE.PlaneGeometry(1.5, 1);
+            const flagMaterial = new THREE.MeshStandardMaterial({
+                color: shipConfig.flag.color,
+                side: THREE.DoubleSide
+            });
+            flag = new THREE.Mesh(flagGeometry, flagMaterial);
+            flag.position.z = -shipConfig.hull.length / 2;
+            flag.position.y = shipConfig.hull.height / 2 + 10;
+            flag.castShadow = true;
+            flag.receiveShadow = true;
+            ship.add(flag);
+        }
+
+        // Create additional ship details
+        function createShipDetails() {
+            // Captain's cabin at the stern
+            const cabinGeometry = new THREE.BoxGeometry(shipConfig.hull.width - 0.5, 1.5, 3);
+            const cabinMaterial = new THREE.MeshStandardMaterial({ color: shipConfig.hull.color });
+            const cabin = new THREE.Mesh(cabinGeometry, cabinMaterial);
+            cabin.position.z = -shipConfig.hull.length / 2 + 1.5;
+            cabin.position.y = shipConfig.hull.height / 2 + 1;
+            cabin.castShadow = true;
+            cabin.receiveShadow = true;
+            ship.add(cabin);
+            
+            // Railings
+            const railingMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+            
+            // Side railings
+            const leftRailingGeometry = new THREE.BoxGeometry(0.2, 0.2, shipConfig.hull.length);
+            const leftRailing = new THREE.Mesh(leftRailingGeometry, railingMaterial);
+            leftRailing.position.x = shipConfig.hull.width / 2;
+            leftRailing.position.y = shipConfig.hull.height / 2 + 0.6;
+            leftRailing.castShadow = true;
+            ship.add(leftRailing);
+            
+            const rightRailingGeometry = new THREE.BoxGeometry(0.2, 0.2, shipConfig.hull.length);
+            const rightRailing = new THREE.Mesh(rightRailingGeometry, railingMaterial);
+            rightRailing.position.x = -shipConfig.hull.width / 2;
+            rightRailing.position.y = shipConfig.hull.height / 2 + 0.6;
+            rightRailing.castShadow = true;
+            ship.add(rightRailing);
+            
+            // Bowsprit (the long pole extending from the front of the ship)
+            const bowspritGeometry = new THREE.CylinderGeometry(0.1, 0.2, 5, 8);
+            const bowsprit = new THREE.Mesh(bowspritGeometry, railingMaterial);
+            bowsprit.position.z = shipConfig.hull.length / 2 + 2.5;
+            bowsprit.position.y = shipConfig.hull.height / 2 + 0.5;
+            bowsprit.rotation.x = Math.PI / 8;
+            bowsprit.castShadow = true;
+            ship.add(bowsprit);
+        }
+
+        // Set up GUI controls
+        function setupGUI() {
+            const gui = new dat.GUI();
+            
+            // Hull controls
+            const hullFolder = gui.addFolder('Hull');
+            hullFolder.addColor(shipConfig.hull, 'color').onChange(() => updateShipColors());
+            hullFolder.open();
+            
+            // Sail controls
+            const sailsFolder = gui.addFolder('Sails');
+            sailsFolder.addColor(shipConfig.sails, 'color').onChange(() => updateShipColors());
+            sailsFolder.add(shipConfig.sails, 'count', 1, 5).step(1).onChange(() => updateShip());
+            sailsFolder.add(shipConfig.sails, 'raised').onChange(() => createSails());
+            sailsFolder.open();
+            
+            // Cannon controls
+            const cannonsFolder = gui.addFolder('Cannons');
+            cannonsFolder.add(shipConfig.cannons, 'count', 0, 20).step(2).onChange(() => createCannons());
+            cannonsFolder.add(shipConfig.cannons, 'size', 0.1, 0.5).step(0.05).onChange(() => createCannons());
+            cannonsFolder.open();
+            
+            // Mortar controls
+            const mortarsFolder = gui.addFolder('Mortars');
+            mortarsFolder.add(shipConfig.mortars, 'count', 0, 5).step(1).onChange(() => createMortars());
+            mortarsFolder.add(shipConfig.mortars, 'size', 0.3, 0.7).step(0.05).onChange(() => createMortars());
+            mortarsFolder.open();
+            
+            // Flag controls
+            const flagFolder = gui.addFolder('Flag');
+            flagFolder.addColor(shipConfig.flag, 'color').onChange(() => {
+                if (flag) flag.material.color.set(shipConfig.flag.color);
+            });
+            flagFolder.add(shipConfig.flag, 'visible').onChange(() => createFlag());
+            flagFolder.open();
+            
+            // Scene controls
+            const sceneFolder = gui.addFolder('Scene');
+            sceneFolder.addColor(shipConfig, 'waterColor').onChange(() => {
+                if (water) water.material.color.set(shipConfig.waterColor);
+            });
+            sceneFolder.add(shipConfig, 'oceanVisible').onChange(() => {
+                if (water) water.visible = shipConfig.oceanVisible;
+            });
+            sceneFolder.open();
+        }
+
+        // Update ship colors
+        function updateShipColors() {
+            // Update hull color
+            ship.children.forEach(child => {
+                if (child.material && child.position.y <= shipConfig.hull.height) {
+                    if (child.material.color && !sailObjects.includes(child) && 
+                        !cannonObjects.includes(child) && !mortarObjects.includes(child)) {
+                        child.material.color.set(shipConfig.hull.color);
+                    }
+                }
+            });
+            
+            // Update sail colors
+            sailObjects.forEach(sail => {
+                sail.material.color.set(shipConfig.sails.color);
+            });
+        }
+
+        // Updates the ship when configuration changes
+        function updateShip() {
+            // Store the current position and rotation
+            const position = ship.position.clone();
+            const rotation = ship.rotation.clone();
+            
+            // Remove the current ship
+            scene.remove(ship);
+            
+            // Recreate the ship
+            createShip();
+            
+            // Restore position and rotation
+            ship.position.copy(position);
+            ship.rotation.copy(rotation);
+        }
+
+        // Handle window resize
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // Add gentle rocking motion to the ship
+            if (ship) {
+                ship.rotation.x = Math.sin(Date.now() * 0.001) * 0.02;
+                ship.rotation.z = Math.sin(Date.now() * 0.0008) * 0.01;
+            }
+            
+            // Update orbit controls
+            controls.update();
+            
+            // Render scene
+            renderer.render(scene, camera);
+        }
+
+        // Initialize the application when the page loads
+        window.onload = init;
+    </script>
+</body>
+</html>

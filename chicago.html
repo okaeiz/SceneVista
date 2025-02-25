@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chicago - Adler & Sullivan Era</title>
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background-color: #87CEEB; 
+        }
+        canvas { 
+            display: block; 
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-family: Georgia, serif;
+            font-weight: bold;
+            font-size: 18px;
+            text-shadow: 1px 1px 2px black;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">Chicago - Adler & Sullivan Era (1880-1900)</div>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dat.gui@0.7.7/build/dat.gui.min.js"></script>
+    <script>
+        // Configuration object
+        const cityConfig = {
+            // Building settings
+            buildings: {
+                skyscraperCount: 15,
+                skyscraperHeightMultiplier: 1.0,
+                lowRiseCount: 200,
+                lowRiseHeightMultiplier: 1.0,
+                variety: 3
+            },
+            // Traffic settings
+            traffic: {
+                vehicleCount: 100,
+                speed: 1.0,
+                active: true
+            },
+            // Environment settings
+            environment: {
+                timeOfDay: "day",
+                fogDensity: 0.005,
+                riverVisible: true
+            },
+            // Ornament level
+            ornamentLevel: 2
+        };
+
+        // Scene, camera, renderer variables
+        let scene, camera, renderer, controls;
+        
+        // City elements
+        let skyscrapers = [], lowRises = [], vehicles = [], bridges = [], river;
+        
+        // City layout
+        const CITY_SIZE = 1000;
+        const BLOCK_SIZE = 50;
+        const STREET_WIDTH = 20;
+        const RIVER_WIDTH = 40;
+        const RIVER_POSITION = 0;
+        
+        // Material colors based on era (muted tones, terracotta, buff, earthy)
+        const BUILDING_COLORS = [
+            0xA56D46, // Terracotta
+            0xD6C6B1, // Buff limestone
+            0x8B4513, // Brown
+            0x696969, // Dark gray
+            0xCD853F, // Peru
+            0xA0522D  // Sienna
+        ];
+
+        // Initialize the scene
+        function init() {
+            // Create scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB); // Sky blue
+            
+            // Add fog for atmosphere
+            scene.fog = new THREE.FogExp2(0xD3D3D3, cityConfig.environment.fogDensity);
+            
+            // Create camera
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 3000);
+            camera.position.set(200, 200, 200);
+            camera.lookAt(0, 0, 0);
+            
+            // Create renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.body.appendChild(renderer.domElement);
+            
+            // Add orbit controls
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.screenSpacePanning = false;
+            controls.minDistance = 100;
+            controls.maxDistance = 1000;
+            controls.maxPolarAngle = Math.PI / 2 - 0.1;
+            
+            // Add lights
+            setupLights();
+            
+            // Create ground
+            createGround();
+            
+            // Create river
+            createRiver();
+            
+            // Create city grid (streets)
+            createStreets();
+            
+            // Create bridges
+            createBridges();
+            
+            // Create buildings
+            createBuildings();
+            
+            // Setup traffic
+            setupTraffic();
+            
+            // Setup GUI
+            setupGUI();
+            
+            // Handle window resize
+            window.addEventListener('resize', onWindowResize);
+            
+            // Start animation loop
+            animate();
+        }
+
+        // Set up lights in the scene
+        function setupLights() {
+            // Ambient light
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+            
+            // Directional light (sun)
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(1, 1, 1).normalize();
+            directionalLight.castShadow = true;
+            directionalLight.shadow.mapSize.width = 2048;
+            directionalLight.shadow.mapSize.height = 2048;
+            directionalLight.shadow.camera.near = 1;
+            directionalLight.shadow.camera.far = 1500;
+            directionalLight.shadow.camera.left = -500;
+            directionalLight.shadow.camera.right = 500;
+            directionalLight.shadow.camera.top = 500;
+            directionalLight.shadow.camera.bottom = -500;
+            scene.add(directionalLight);
+        }
+
+        // Create the ground plane
+        function createGround() {
+            const groundGeometry = new THREE.PlaneGeometry(CITY_SIZE * 1.5, CITY_SIZE * 1.5);
+            const groundMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x555555,
+                roughness: 0.8,
+                metalness: 0.2
+            });
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2;
+            ground.receiveShadow = true;
+            scene.add(ground);
+        }
+
+        // Create the Chicago River
+        function createRiver() {
+            const riverGeometry = new THREE.PlaneGeometry(CITY_SIZE * 1.2, RIVER_WIDTH);
+            const riverMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x1E90FF,
+                roughness: 0.3,
+                metalness: 0.8
+            });
+            river = new THREE.Mesh(riverGeometry, riverMaterial);
+            river.rotation.x = -Math.PI / 2;
+            river.position.y = 0.5;
+            river.receiveShadow = true;
+            scene.add(river);
+        }
+
+        // Create street grid
+        function createStreets() {
+            // Create street material
+            const streetMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x333333,
+                roughness: 0.9,
+                metalness: 0.1
+            });
+            
+            // Create east-west streets (horizontal)
+            for (let z = -CITY_SIZE/2; z <= CITY_SIZE/2; z += BLOCK_SIZE + STREET_WIDTH) {
+                if (Math.abs(z - RIVER_POSITION) < RIVER_WIDTH/2) continue; // Skip at river position
+                
+                const streetGeometry = new THREE.PlaneGeometry(CITY_SIZE, STREET_WIDTH);
+                const street = new THREE.Mesh(streetGeometry, streetMaterial);
+                street.rotation.x = -Math.PI / 2;
+                street.position.set(0, 0.1, z);
+                street.receiveShadow = true;
+                scene.add(street);
+            }
+            
+            // Create north-south streets (vertical)
+            for (let x = -CITY_SIZE/2; x <= CITY_SIZE/2; x += BLOCK_SIZE + STREET_WIDTH) {
+                const streetGeometry = new THREE.PlaneGeometry(STREET_WIDTH, CITY_SIZE);
+                const street = new THREE.Mesh(streetGeometry, streetMaterial);
+                street.rotation.x = -Math.PI / 2;
+                street.position.set(x, 0.1, 0);
+                street.receiveShadow = true;
+                scene.add(street);
+            }
+        }
+
+        // Create bridges over the river
+        function createBridges() {
+            const bridgePositions = [-300, -200, -100, 0, 100, 200, 300];
+            const bridgeMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x444444,
+                roughness: 0.6,
+                metalness: 0.4
+            });
+            
+            bridges = [];
+            bridgePositions.forEach(x => {
+                // Bridge deck
+                const bridgeGeometry = new THREE.BoxGeometry(STREET_WIDTH, 2, RIVER_WIDTH + 5);
+                const bridge = new THREE.Mesh(bridgeGeometry, bridgeMaterial);
+                bridge.position.set(x, 1, RIVER_POSITION);
+                bridge.receiveShadow = true;
+                bridge.castShadow = true;
+                scene.add(bridge);
+                bridges.push(bridge);
+                
+                // Bridge railings
+                const railingGeometry = new THREE.BoxGeometry(STREET_WIDTH, 2, 1);
+                const railing1 = new THREE.Mesh(railingGeometry, bridgeMaterial);
+                railing1.position.set(x, 2, RIVER_POSITION + RIVER_WIDTH/2 + 1);
+                railing1.receiveShadow = true;
+                railing1.castShadow = true;
+                scene.add(railing1);
+                
+                const railing2 = new THREE.Mesh(railingGeometry, bridgeMaterial);
+                railing2.position.set(x, 2, RIVER_POSITION - RIVER_WIDTH/2 - 1);
+                railing2.receiveShadow = true;
+                railing2.castShadow = true;
+                scene.add(railing2);
+            });
+        }
+
+        // Create buildings throughout the city
+        function createBuildings() {
+            // Clear existing buildings
+            skyscrapers.forEach(building => scene.remove(building));
+            lowRises.forEach(building => scene.remove(building));
+            skyscrapers = [];
+            lowRises = [];
+            
+            // Create skyscrapers (downtown area)
+            const skyscraperArea = 300; // Downtown area size
+            for (let i = 0; i < cityConfig.buildings.skyscraperCount; i++) {
+                // Generate position within downtown area
+                let x, z;
+                do {
+                    x = Math.random() * skyscraperArea - skyscraperArea/2;
+                    z = Math.random() * skyscraperArea - skyscraperArea/2;
+                } while (Math.abs(z - RIVER_POSITION) < RIVER_WIDTH/2); // Avoid river
+                
+                const width = 15 + Math.random() * 15;
+                const depth = 15 + Math.random() * 15;
+                const baseHeight = 40 + Math.random() * 60;
+                const height = baseHeight * cityConfig.buildings.skyscraperHeightMultiplier;
+                
+                const building = createSullivanBuilding(x, z, width, height, depth);
+                skyscrapers.push(building);
+            }
+            
+            // Create low-rise buildings throughout the city
+            for (let i = 0; i < cityConfig.buildings.lowRiseCount; i++) {
+                // Generate random position within city bounds
+                let x, z;
+                do {
+                    x = Math.random() * CITY_SIZE - CITY_SIZE/2;
+                    z = Math.random() * CITY_SIZE - CITY_SIZE/2;
+                } while (
+                    Math.abs(z - RIVER_POSITION) < RIVER_WIDTH/2 || // Avoid river
+                    (Math.abs(x) < 150 && Math.abs(z) < 150) // Avoid central downtown
+                );
+                
+                const width = 10 + Math.random() * 15;
+                const depth = 10 + Math.random() * 15;
+                const baseHeight = 5 + Math.random() * 15;
+                const height = baseHeight * cityConfig.buildings.lowRiseHeightMultiplier;
+                
+                const building = createLowRiseBuilding(x, z, width, height, depth);
+                lowRises.push(building);
+            }
+        }
+
+        // Create a Sullivan-style skyscraper
+        function createSullivanBuilding(x, z, width, height, depth) {
+            const building = new THREE.Group();
+            
+            // Base color from the era palette
+            const baseColorIndex = Math.floor(Math.random() * BUILDING_COLORS.length);
+            const baseColor = BUILDING_COLORS[baseColorIndex];
+            
+            // Main building body
+            const bodyGeometry = new THREE.BoxGeometry(width, height, depth);
+            const bodyMaterial = new THREE.MeshStandardMaterial({ 
+                color: baseColor,
+                roughness: 0.7,
+                metalness: 0.2
+            });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            body.position.y = height / 2;
+            body.castShadow = true;
+            body.receiveShadow = true;
+            building.add(body);
+            
+            // Add ornamentation based on ornament level
+            if (cityConfig.ornamentLevel > 0) {
+                // Cornice (decorative top)
+                const corniceHeight = 2 + cityConfig.ornamentLevel;
+                const corniceGeometry = new THREE.BoxGeometry(width + 2, corniceHeight, depth + 2);
+                const corniceMaterial = new THREE.MeshStandardMaterial({ 
+                    color: 0xD6C6B1, // Limestone color
+                    roughness: 0.6,
+                    metalness: 0.3
+                });
+                const cornice = new THREE.Mesh(corniceGeometry, corniceMaterial);
+                cornice.position.y = height + corniceHeight/2;
+                cornice.castShadow = true;
+                building.add(cornice);
+                
+                // Base/Plinth
+                const plinthHeight = 3 + cityConfig.ornamentLevel;
+                const plinthGeometry = new THREE.BoxGeometry(width + 2, plinthHeight, depth + 2);
+                const plinthMaterial = new THREE.MeshStandardMaterial({ 
+                    color: 0x8B4513, // Dark brown
+                    roughness: 0.8,
+                    metalness: 0.1
+                });
+                const plinth = new THREE.Mesh(plinthGeometry, plinthMaterial);
+                plinth.position.y = plinthHeight/2;
+                plinth.castShadow = true;
+                building.add(plinth);
+                
+                // Windows (vertical strips - Sullivan's characteristic)
+                if (cityConfig.ornamentLevel > 1) {
+                    // Vertical window strips on facades
+                    const stripWidth = 1.5;
+                    const stripDepth = 0.3;
+                    const stripMaterial = new THREE.MeshStandardMaterial({ 
+                        color: 0x333333, 
+                        roughness: 0.4,
+                        metalness: 0.6
+                    });
+                    
+                    // Front facade windows
+                    const numStrips = Math.floor(width / 4);
+                    for (let i = 0; i < numStrips; i++) {
+                        const windowStrip = new THREE.Mesh(
+                            new THREE.BoxGeometry(stripWidth, height * 0.7, stripDepth),
+                            stripMaterial
+                        );
+                        const offset = (width / numStrips) * (i - (numStrips-1)/2);
+                        windowStrip.position.set(offset, height/2 + 2, depth/2 + 0.1);
+                        building.add(windowStrip);
+                    }
+                    
+                    // Side facade windows
+                    const numSideStrips = Math.floor(depth / 4);
+                    for (let i = 0; i < numSideStrips; i++) {
+                        const windowStrip = new THREE.Mesh(
+                            new THREE.BoxGeometry(stripDepth, height * 0.7, stripWidth),
+                            stripMaterial
+                        );
+                        const offset = (depth / numSideStrips) * (i - (numSideStrips-1)/2);
+                        windowStrip.position.set(width/2 + 0.1, height/2 + 2, offset);
+                        building.add(windowStrip);
+                    }
+                }
+                
+                // Decorative elements at base and top if ornament level is highest
+                if (cityConfig.ornamentLevel > 2) {
+                    // Terra cotta decorative panels at top
+                    const panelGeometry = new THREE.BoxGeometry(width * 0.9, 2, depth * 0.9);
+                    const panelMaterial = new THREE.MeshStandardMaterial({ 
+                        color: 0xA56D46, // Terra cotta
+                        roughness: 0.7,
+                        metalness: 0.2
+                    });
+                    const panel = new THREE.Mesh(panelGeometry, panelMaterial);
+                    panel.position.y = height - 5;
+                    building.add(panel);
+                    
+                    // Entrance archway
+                    const entranceWidth = 3;
+                    const entranceHeight = 6;
+                    const entranceGeometry = new THREE.BoxGeometry(entranceWidth, entranceHeight, 2);
+                    const entranceMaterial = new THREE.MeshStandardMaterial({ 
+                        color: 0x2F4F4F, // Dark slate gray
+                        roughness: 0.3,
+                        metalness: 0.7
+                    });
+                    const entrance = new THREE.Mesh(entranceGeometry, entranceMaterial);
+                    entrance.position.set(0, entranceHeight/2, depth/2 + 0.5);
+                    building.add(entrance);
+                }
+            }
+            
+            // Position the building
+            building.position.set(x, 0, z);
+            
+            // Add to scene
+            scene.add(building);
+            
+            return building;
+        }
+
+        // Create a low-rise building (smaller structures)
+        function createLowRiseBuilding(x, z, width, height, depth) {
+            const building = new THREE.Group();
+            
+            // Base color from the era palette
+            const baseColorIndex = Math.floor(Math.random() * BUILDING_COLORS.length);
+            const baseColor = BUILDING_COLORS[baseColorIndex];
+            
+            // Main building body
+            const bodyGeometry = new THREE.BoxGeometry(width, height, depth);
+            const bodyMaterial = new THREE.MeshStandardMaterial({ 
+                color: baseColor,
+                roughness: 0.8,
+                metalness: 0.1
+            });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            body.position.y = height / 2;
+            body.castShadow = true;
+            body.receiveShadow = true;
+            building.add(body);
+            
+            // Simple windows
+            const windowMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x333333, 
+                roughness: 0.4,
+                metalness: 0.6
+            });
+            
+            // Front windows
+            const frontWindowRows = Math.min(Math.floor(height / 3), 5);
+            const frontWindowCols = Math.floor(width / 3);
+            
+            for (let row = 0; row < frontWindowRows; row++) {
+                for (let col = 0; col < frontWindowCols; col++) {
+                    const windowWidth = 1.5;
+                    const windowHeight = 2;
+                    const windowGeometry = new THREE.PlaneGeometry(windowWidth, windowHeight);
+                    const windowMesh = new THREE.Mesh(windowGeometry, windowMaterial);
+                    
+                    // Position windows evenly across front facade
+                    const xOffset = (col - (frontWindowCols-1)/2) * (width / frontWindowCols);
+                    const yOffset = (row + 1) * (height / (frontWindowRows+1));
+                    
+                    windowMesh.position.set(xOffset, yOffset, depth/2 + 0.1);
+                    building.add(windowMesh);
+                }
+            }
+            
+            // Position the building
+            building.position.set(x, 0, z);
+            
+            // Add to scene
+            scene.add(building);
+            
+            return building;
+        }
+
+        // Set up vehicle traffic
+        function setupTraffic() {
+            // Clear existing vehicles
+            vehicles.forEach(vehicle => scene.remove(vehicle));
+            vehicles = [];
+            
+            // Create new vehicles
+            for (let i = 0; i < cityConfig.traffic.vehicleCount; i++) {
+                createVehicle();
+            }
+        }
+
+        // Create a single vehicle
+        function createVehicle() {
+            // Vehicle colors
+            const vehicleColors = [0x222222, 0x444444, 0x666666, 0x555555, 0x333333];
+            const color = vehicleColors[Math.floor(Math.random() * vehicleColors.length)];
+            
+            // Vehicle group
+            const vehicle = new THREE.Group();
+            
+            // Main body
+            const bodyGeometry = new THREE.BoxGeometry(3, 1.5, 6);
+            const bodyMaterial = new THREE.MeshStandardMaterial({ 
+                color: color,
+                roughness: 0.7,
+                metalness: 0.3
+            });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            body.position.y = 1;
+            body.castShadow = true;
+            vehicle.add(body);
+            
+            // Windows
+            const windowGeometry = new THREE.BoxGeometry(2.8, 0.8, 3);
+            const windowMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x222222,
+                roughness: 0.3,
+                metalness: 0.7
+            });
+            const windows = new THREE.Mesh(windowGeometry, windowMaterial);
+            windows.position.y = 1.8;
+            windows.position.z = -0.5;
+            vehicle.add(windows);
+            
+            // Wheels
+            const wheelGeometry = new THREE.CylinderGeometry(0.6, 0.6, 0.4, 8);
+            const wheelMaterial = new THREE.MeshStandardMaterial({ color: 0x111111 });
+            
+            const wheelPositions = [
+                [-1.5, 0.6, -1.5],
+                [1.5, 0.6, -1.5],
+                [-1.5, 0.6, 1.5],
+                [1.5, 0.6, 1.5]
+            ];
+            
+            wheelPositions.forEach(pos => {
+                const wheel = new THREE.Mesh(wheelGeometry, wheelMaterial);
+                wheel.rotation.z = Math.PI / 2;
+                wheel.position.set(...pos);
+                wheel.castShadow = true;
+                vehicle.add(wheel);
+            });
+            
+            // Set random position on road
+            const onBridge = Math.random() > 0.7;
+            let x, z, direction;
+            
+            if (onBridge && cityConfig.environment.riverVisible) {
+                // Position on a bridge
+                const bridgeIndex = Math.floor(Math.random() * bridges.length);
+                x = bridges[bridgeIndex].position.x;
+                z = Math.random() * RIVER_WIDTH - RIVER_WIDTH/2 + RIVER_POSITION;
+                direction = new THREE.Vector3(0, 0, Math.random() > 0.5 ? 1 : -1);
+            } else {
+                // Position on a street
+                const onEastWestStreet = Math.random() > 0.5;
+                
+                if (onEastWestStreet) {
+                    // East-West streets
+                    z = Math.round((Math.random() * CITY_SIZE - CITY_SIZE/2) / (BLOCK_SIZE + STREET_WIDTH)) * (BLOCK_SIZE + STREET_WIDTH);
+                    x = Math.random() * CITY_SIZE - CITY_SIZE/2;
+                    direction = new THREE.Vector3(Math.random() > 0.5 ? 1 : -1, 0, 0);
+                    
+                    // Avoid river
+                    if (Math.abs(z - RIVER_POSITION) < RIVER_WIDTH/2) {
+                        z += RIVER_WIDTH;
+                    }
+                } else {
+                    // North-South streets
+                    x = Math.round((Math.random() * CITY_SIZE - CITY_SIZE/2) / (BLOCK_SIZE + STREET_WIDTH)) * (BLOCK_SIZE + STREET_WIDTH);
+                    z = Math.random() * CITY_SIZE - CITY_SIZE/2;
+                    direction = new THREE.Vector3(0, 0, Math.random() > 0.5 ? 1 : -1);
+                    
+                    // Adjust if near river to be on a bridge
+                    if (Math.abs(z - RIVER_POSITION) < RIVER_WIDTH/2) {
+                        // Find closest bridge
+                        let closestBridge = null;
+                        let minDistance = Infinity;
+                        
+                        bridges.forEach(bridge => {
+                            const distance = Math.abs(bridge.position.x - x);
+                            if (distance < minDistance) {
+                                minDistance = distance;
+                                closestBridge = bridge;
+                            }
+                        });
+                        
+                        if (closestBridge && minDistance < STREET_WIDTH/2) {
+                            x = closestBridge.position.x;
+                        } else {
+                            z += RIVER_WIDTH;
+                        }
+                    }
+                }
+            }
+            
+            // Set vehicle position and rotation based on direction
+            vehicle.position.set(x, 0, z);
+            if (direction.x !== 0) {
+                vehicle.rotation.y = direction.x > 0 ? 0 : Math.PI;
+            } else {
+                vehicle.rotation.y = direction.z > 0 ? Math.PI / 2 : -Math.PI / 2;
+            }
+            
+            // Store direction for movement
+            vehicle.userData = {
+                direction: direction,
+                speed: 0.1 + Math.random() * 0.2
+            };
+            
+            // Add to scene and vehicles array
+            scene.add(vehicle);
+            vehicles.push(vehicle);
+            
+            return vehicle;
+        }
+
+        // Update vehicle positions
+        function updateTraffic() {
+            if (!cityConfig.traffic.active) return;
+            
+            vehicles.forEach(vehicle => {
+                const direction = vehicle.userData.direction;
+                const speed = vehicle.userData.speed * cityConfig.traffic.speed;
+                
+                // Move vehicle
+                vehicle.position.x += direction.x * speed;
+                vehicle.position.z += direction.z * speed;
+                
+                // Check if out of bounds
+                if (
+                    vehicle.position.x > CITY_SIZE/2 || 
+                    vehicle.position.x < -CITY_SIZE/2 ||
+                    vehicle.position.z > CITY_SIZE/2 || 
+                    vehicle.position.z < -CITY_SIZE/2
+                ) {
+                    // Reposition to opposite side
+                    if (direction.x > 0) vehicle.position.x = -CITY_SIZE/2;
+                    else if (direction.x < 0) vehicle.position.x = CITY_SIZE/2;
+                    else if (direction.z > 0) vehicle.position.z = -CITY_SIZE/2;
+                    else if (direction.z < 0) vehicle.position.z = CITY_SIZE/2;
+                }
+            });
+        }
+
+        // Set up GUI controls
+        function setupGUI() {
+            const gui = new dat.GUI();
+            
+            // Building controls
+            const buildingsFolder = gui.addFolder('Buildings');
+            buildingsFolder.add(cityConfig.buildings, 'skyscraperCount', 5, 30).step(1).name('Skyscraper Count').onChange(createBuildings);
+            buildingsFolder.add(cityConfig.buildings, 'skyscraperHeightMultiplier', 0.5, 2).step(0.1).name('Skyscraper Height').onChange(createBuildings);
+            buildingsFolder.add(cityConfig.buildings, 'lowRiseCount', 50, 400).step(10).name('Low-Rise Count').onChange(createBuildings);
+            buildingsFolder.add(cityConfig.buildings, 'lowRiseHeightMultiplier', 0.5, 2).step(0.1).name('Low-Rise Height').onChange(createBuildings);
+            buildingsFolder.open();
+            
+            // Traffic controls
+            const trafficFolder = gui.addFolder('Traffic');
+            trafficFolder.add(cityConfig.traffic, 'vehicleCount', 0, 200).step(10).name('Vehicle Count').onChange(setupTraffic);
+            trafficFolder.add(cityConfig.traffic, 'speed', 0.1, 3).step(0.1).name('Traffic Speed');
+            trafficFolder.add(cityConfig.traffic, 'active').name('Traffic Active');
+            trafficFolder.open();
+            
+            // Architectural style controls
+            const styleFolder = gui.addFolder('Architectural Style');
+            styleFolder.add(cityConfig, 'ornamentLevel', 0, 3).step(1).name('Ornament Level').onChange(createBuildings);
+            styleFolder.open();
+            
+            // Environment controls
+            const envFolder = gui.addFolder('Environment');
+            envFolder.add(cityConfig.environment, 'fogDensity', 0, 0.01).step(0.001).name('Fog Density').onChange(value => {
+                scene.fog.density = value;
+            });
+            envFolder.add(cityConfig.environment, 'riverVisible').name('River Visible').onChange(value => {
+                river.visible = value;
+            });
+            envFolder.open();
+        }
+
+        // Handle window resize
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // Update traffic movement
+            updateTraffic();
+            
+            // Update controls
+            controls.update();
+            
+            // Render scene
+            renderer.render(scene, camera);
+        }
+
+        // Initialize scene when page loads
+        window.onload = init;
+    </script>
+</body>
+</html>

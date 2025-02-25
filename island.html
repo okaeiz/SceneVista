@@ -1,0 +1,1796 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced Caribbean Scene (16-17th Century)</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-family: Arial, sans-serif;
+            pointer-events: none;
+            text-shadow: 1px 1px 1px black;
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 24px;
+            text-shadow: 1px 1px 1px black;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">Enhanced Caribbean Scene (16-17th Century)</div>
+    <div id="loading">Loading Caribbean World...</div>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/objects/Water.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/libs/stats.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/libs/dat.gui.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/simplex-noise@2.4.0/simplex-noise.js"></script>
+    <script>
+        // Scene setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 10000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        // Global settings for the simulation
+        const SETTINGS = {
+            timeOfDay: 12, // 0-24 hours
+            population: 50, // Number of civilians
+            islandCount: 3, // Number of islands
+            islandSize: 100, // Base size of islands
+            treeCount: 50, // Number of trees
+            shipCount: 5, // Number of ships
+            showHelpers: false, // Show debug helpers
+            resetScene: function() {
+                resetSimulation();
+            }
+        };
+
+        // Globals
+        let water, sun, sky, islands = [], ships = [], people = [], allPaths = [];
+        let noise = new SimplexNoise();
+        const clock = new THREE.Clock();
+        
+        // Controls
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.maxPolarAngle = Math.PI * 0.495;
+        controls.minDistance = 40;
+        controls.maxDistance = 800;
+
+        // Start with camera looking at the scene from a reasonable distance
+        camera.position.set(200, 150, 200);
+        controls.target.set(0, 0, 0);
+        controls.update();
+
+        // Fog for atmosphere
+        scene.fog = new THREE.FogExp2(0xaaccff, 0.0005);
+
+        // Time of day lighting system
+        function setupLighting() {
+            // Ambient light
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+            scene.add(ambientLight);
+            
+            // Sun directional light
+            sun = new THREE.DirectionalLight(0xffffff, 1);
+            sun.position.set(100, 100, 50);
+            sun.castShadow = true;
+            
+            // Increase shadow map resolution and area
+            sun.shadow.mapSize.width = 2048;
+            sun.shadow.mapSize.height = 2048;
+            sun.shadow.camera.near = 10;
+            sun.shadow.camera.far = 1000;
+            sun.shadow.camera.left = -500;
+            sun.shadow.camera.right = 500;
+            sun.shadow.camera.top = 500;
+            sun.shadow.camera.bottom = -500;
+            
+            scene.add(sun);
+            
+            // Update sun position based on time of day
+            updateTimeOfDay(SETTINGS.timeOfDay);
+        }
+        
+        // Update lighting based on time of day
+        function updateTimeOfDay(time) {
+            // Calculate sun position based on time (0-24)
+            const angle = (time / 24) * Math.PI * 2 - Math.PI/2;
+            const height = Math.sin(angle) * 200;
+            const distance = Math.cos(angle) * 200;
+            
+            sun.position.set(distance, height, 0);
+            
+            // Update light color and intensity based on time
+            if (time >= 6 && time <= 18) {
+                // Daytime
+                const dayProgress = Math.min(1, 1 - Math.abs((time - 12) / 6));
+                const intensity = 0.8 + dayProgress * 0.2;
+                sun.intensity = intensity;
+                sun.color.setHSL(0.1, 0.1, 1); // Bright white-yellow at noon
+                scene.fog.color.set(0xaaccff); // Blue daytime fog
+                
+                // Sky color
+                const skyBlue = 0.5 + dayProgress * 0.5;
+                scene.background = new THREE.Color().setHSL(0.6, 0.6, skyBlue); // Blue sky
+            } else {
+                // Night time
+                const nightProgress = (time < 6) ? time / 6 : (24 - time) / 6;
+                const intensity = 0.1 + nightProgress * 0.2;
+                sun.intensity = intensity;
+                sun.color.setHSL(0.1, 0.2, 0.5); // Cooler, dimmer light at night
+                scene.fog.color.set(0x001133); // Dark blue night fog
+                
+                // Sky color
+                const skyBrightness = 0.05 + nightProgress * 0.1;
+                scene.background = new THREE.Color().setHSL(0.6, 0.3, skyBrightness); // Dark blue sky
+            }
+        }
+
+        // Create water plane
+        function createWater() {
+            const waterGeometry = new THREE.PlaneGeometry(10000, 10000);
+            water = new THREE.Water(
+                waterGeometry,
+                {
+                    textureWidth: 512,
+                    textureHeight: 512,
+                    waterNormals: new THREE.TextureLoader().load('https://threejs.org/examples/textures/waternormals.jpg', function(texture) {
+                        texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+                    }),
+                    alpha: 0.8,
+                    sunDirection: sun.position.clone().normalize(),
+                    sunColor: 0xffffff,
+                    waterColor: 0x001e0f,
+                    distortionScale: 3.7,
+                    fog: scene.fog !== undefined
+                }
+            );
+            water.rotation.x = -Math.PI / 2;
+            water.receiveShadow = true;
+            scene.add(water);
+        }
+
+        // Create a natural-shaped island using perlin noise
+        function createNaturalIsland(centerX, centerZ, size) {
+            const islandGroup = new THREE.Group();
+            islandGroup.position.set(centerX, 0, centerZ);
+            islandGroup.userData.size = size;
+            islandGroup.userData.paths = [];
+            islandGroup.userData.docks = [];
+            
+            // Create island shape using noise
+            const segments = 64;
+            const shoreGeometry = new THREE.BufferGeometry();
+            const coreGeometry = new THREE.BufferGeometry();
+            const shoreVertices = [];
+            const coreVertices = [];
+            const shoreIndices = [];
+            const coreIndices = [];
+            
+            // Base shape parameters
+            const coastalVariation = 0.4; // How much the coastline varies
+            const cliffHeight = size * 0.2; // Height of the island
+            
+            // Generate vertices for the shore and core of the island
+            for (let i = 0; i <= segments; i++) {
+                const theta = (i / segments) * Math.PI * 2;
+                
+                // Calculate radius variations using noise
+                const noiseVal = 0.5 + 0.5 * noise.noise2D(Math.cos(theta) * 0.5, Math.sin(theta) * 0.5);
+                const radiusVariation = 1 + coastalVariation * noiseVal;
+                
+                // Shore (beach) vertices
+                const shoreRadius = size * radiusVariation;
+                const shoreX = Math.cos(theta) * shoreRadius;
+                const shoreZ = Math.sin(theta) * shoreRadius;
+                shoreVertices.push(shoreX, 0, shoreZ); // Beach at water level
+                
+                // Core (elevated) vertices
+                const coreRadius = size * 0.7 * radiusVariation;
+                const coreX = Math.cos(theta) * coreRadius;
+                const coreZ = Math.sin(theta) * coreRadius;
+                
+                // Add some height variation
+                const heightVariation = 0.5 + 0.5 * noise.noise2D(coreX * 0.01, coreZ * 0.01);
+                const coreHeight = cliffHeight * heightVariation;
+                
+                coreVertices.push(coreX, coreHeight, coreZ);
+            }
+            
+            // Create triangles for shore mesh
+            for (let i = 0; i < segments; i++) {
+                const center = segments + 1; // Center vertex index
+                const next = (i + 1) % (segments + 1);
+                
+                // Add triangles connecting to the center vertex
+                shoreIndices.push(i, next, center);
+            }
+            
+            // Create triangles for core mesh (elevated part)
+            for (let i = 0; i < segments; i++) {
+                const center = segments + 1; // Center vertex index
+                const next = (i + 1) % (segments + 1);
+                
+                // Add triangles connecting to the center vertex
+                coreIndices.push(i, next, center);
+            }
+            
+            // Add center vertices
+            shoreVertices.push(0, 0, 0); // Center of shore at water level
+            coreVertices.push(0, cliffHeight, 0); // Center of core at cliff height
+            
+            // Create beach/shore mesh
+            shoreGeometry.setIndex(shoreIndices);
+            shoreGeometry.setAttribute('position', new THREE.Float32BufferAttribute(shoreVertices, 3));
+            shoreGeometry.computeVertexNormals();
+            
+            const shoreMaterial = new THREE.MeshLambertMaterial({ color: 0xf0e68c }); // Sandy color
+            const shoreMesh = new THREE.Mesh(shoreGeometry, shoreMaterial);
+            shoreMesh.receiveShadow = true;
+            islandGroup.add(shoreMesh);
+            
+            // Create core (elevated part) mesh
+            coreGeometry.setIndex(coreIndices);
+            coreGeometry.setAttribute('position', new THREE.Float32BufferAttribute(coreVertices, 3));
+            coreGeometry.computeVertexNormals();
+            
+            const coreMaterial = new THREE.MeshLambertMaterial({ color: 0x556b2f }); // Olive green
+            const coreMesh = new THREE.Mesh(coreGeometry, coreMaterial);
+            coreMesh.receiveShadow = true;
+            islandGroup.add(coreMesh);
+            
+            // Create cliff mesh connecting shore to core
+            const cliffGeometry = new THREE.BufferGeometry();
+            const cliffVertices = [];
+            const cliffIndices = [];
+            
+            for (let i = 0; i <= segments; i++) {
+                // Shore vertex
+                const shoreX = shoreVertices[i * 3];
+                const shoreY = shoreVertices[i * 3 + 1];
+                const shoreZ = shoreVertices[i * 3 + 2];
+                
+                // Core vertex
+                const coreX = coreVertices[i * 3];
+                const coreY = coreVertices[i * 3 + 1];
+                const coreZ = coreVertices[i * 3 + 2];
+                
+                // Add both vertices
+                cliffVertices.push(shoreX, shoreY, shoreZ);
+                cliffVertices.push(coreX, coreY, coreZ);
+            }
+            
+            // Add the first vertices again to close the loop
+            cliffVertices.push(shoreVertices[0], shoreVertices[1], shoreVertices[2]);
+            cliffVertices.push(coreVertices[0], coreVertices[1], coreVertices[2]);
+            
+            // Create triangles for the cliff
+            for (let i = 0; i < segments; i++) {
+                const base = i * 2;
+                const next = base + 2;
+                
+                // Each quad is made of two triangles
+                cliffIndices.push(base, base + 1, next);
+                cliffIndices.push(next, base + 1, next + 1);
+            }
+            
+            cliffGeometry.setIndex(cliffIndices);
+            cliffGeometry.setAttribute('position', new THREE.Float32BufferAttribute(cliffVertices, 3));
+            cliffGeometry.computeVertexNormals();
+            
+            const cliffMaterial = new THREE.MeshLambertMaterial({ color: 0x8b4513 }); // Brown cliff
+            const cliffMesh = new THREE.Mesh(cliffGeometry, cliffMaterial);
+            cliffMesh.receiveShadow = true;
+            islandGroup.add(cliffMesh);
+            
+            // Create some bays and peninsulas by adding/subtracting geometry
+            const bayCount = Math.floor(Math.random() * 3) + 1;
+            for (let i = 0; i < bayCount; i++) {
+                const bayAngle = Math.random() * Math.PI * 2;
+                const baySize = size * (0.3 + Math.random() * 0.3);
+                const bayX = Math.cos(bayAngle) * size * 0.8;
+                const bayZ = Math.sin(bayAngle) * size * 0.8;
+                
+                createBay(islandGroup, bayX, bayZ, baySize);
+            }
+            
+            // Create a network of paths on the island
+            createPathNetwork(islandGroup, size);
+            
+            return islandGroup;
+        }
+
+        // Add a bay to an island
+        function createBay(islandGroup, x, z, size) {
+            const bayGeometry = new THREE.CircleGeometry(size, 32);
+            const bayMaterial = new THREE.MeshLambertMaterial({ 
+                color: 0x001e0f, 
+                transparent: true,
+                opacity: 0.8
+            });
+            
+            const bay = new THREE.Mesh(bayGeometry, bayMaterial);
+            bay.rotation.x = -Math.PI / 2;
+            bay.position.set(x, 0.1, z); // Slightly above water level
+            islandGroup.add(bay);
+            
+            // Add a dock near a bay
+            if (Math.random() > 0.5) {
+                createDock(islandGroup, x, z, size);
+            }
+        }
+        
+        // Create a dock for ships
+        function createDock(islandGroup, x, z, baySize) {
+            // Calculate dock position and orientation to point away from island center
+            const dockAngle = Math.atan2(z, x);
+            const dockGroup = new THREE.Group();
+            
+            // Dock location and orientation
+            const distance = Math.sqrt(x * x + z * z);
+            const dockX = x * (baySize / distance);
+            const dockZ = z * (baySize / distance);
+            
+            dockGroup.position.set(dockX, 0, dockZ);
+            dockGroup.rotation.y = dockAngle + Math.PI / 2;
+            
+            // Add a simple wooden pier
+            const pierLength = 20 + Math.random() * 10;
+            const pierWidth = 5;
+            const pierGeometry = new THREE.BoxGeometry(pierWidth, 1, pierLength);
+            const pierMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+            const pier = new THREE.Mesh(pierGeometry, pierMaterial);
+            pier.position.z = -pierLength / 2;
+            pier.position.y = 0.5;
+            pier.receiveShadow = true;
+            pier.castShadow = true;
+            dockGroup.add(pier);
+            
+            // Add wooden posts
+            const postCount = Math.floor(pierLength / 4);
+            for (let i = 0; i < postCount; i++) {
+                for (let j = -1; j <= 1; j += 2) {
+                    const postGeometry = new THREE.CylinderGeometry(0.3, 0.3, 3, 8);
+                    const post = new THREE.Mesh(postGeometry, pierMaterial);
+                    post.position.set(j * (pierWidth / 2 - 0.3), -1, -i * 4);
+                    post.castShadow = true;
+                    dockGroup.add(post);
+                }
+            }
+            
+            // Add harbormaster's building
+            const buildingSize = 4 + Math.random() * 2;
+            const buildingGeometry = new THREE.BoxGeometry(buildingSize, buildingSize, buildingSize);
+            const buildingMaterial = new THREE.MeshLambertMaterial({ color: 0xD2B48C });
+            const building = new THREE.Mesh(buildingGeometry, buildingMaterial);
+            building.position.set(0, buildingSize / 2 + 0.5, -pierLength * 0.8);
+            building.castShadow = true;
+            building.receiveShadow = true;
+            
+            // Add a roof
+            const roofGeometry = new THREE.ConeGeometry(buildingSize * 0.9, buildingSize * 0.6, 4);
+            const roofMaterial = new THREE.MeshLambertMaterial({ color: 0x8B0000 });
+            const roof = new THREE.Mesh(roofGeometry, roofMaterial);
+            roof.position.y = buildingSize + 0.5;
+            roof.rotation.y = Math.PI / 4;
+            roof.castShadow = true;
+            building.add(roof);
+            
+            // Add windows and door
+            addBuildingDetails(building, buildingSize, buildingSize, buildingSize);
+            
+            dockGroup.add(building);
+            
+            // Add ship arrival/departure point
+            const arrivalPoint = new THREE.Vector3(0, 0, -pierLength - 20);
+            dockGroup.userData = {
+                arrivalPoint: arrivalPoint.clone(),
+                dockAngle: dockAngle + Math.PI / 2,
+                inUse: false
+            };
+            
+            // Transform arrival point to world coordinates
+            arrivalPoint.applyMatrix4(dockGroup.matrixWorld);
+            
+            islandGroup.add(dockGroup);
+            islandGroup.userData.docks.push(dockGroup);
+        }
+        
+        // Create network of paths on an island
+        function createPathNetwork(islandGroup, size) {
+            const pathMaterial = new THREE.MeshLambertMaterial({ color: 0xD2B48C });
+            
+            // Create a central plaza
+            const plazaGeometry = new THREE.CircleGeometry(size * 0.15, 32);
+            const plaza = new THREE.Mesh(plazaGeometry, pathMaterial);
+            plaza.rotation.x = -Math.PI / 2;
+            plaza.position.y = size * 0.2 + 0.1;
+            plaza.receiveShadow = true;
+            islandGroup.add(plaza);
+            
+            // Add paths radiating from the center
+            const pathCount = 4 + Math.floor(Math.random() * 4);
+            const pathEnds = [];
+            
+            for (let i = 0; i < pathCount; i++) {
+                const angle = (i / pathCount) * Math.PI * 2;
+                const length = size * (0.4 + Math.random() * 0.3);
+                const width = 3 + Math.random() * 2;
+                
+                const pathGeometry = new THREE.PlaneGeometry(width, length);
+                const path = new THREE.Mesh(pathGeometry, pathMaterial);
+                
+                // Position and rotate the path
+                path.rotation.x = -Math.PI / 2;
+                path.position.set(
+                    Math.cos(angle) * (size * 0.15 + length / 2), 
+                    size * 0.2 + 0.05, 
+                    Math.sin(angle) * (size * 0.15 + length / 2)
+                );
+                path.rotation.z = angle;
+                path.receiveShadow = true;
+                
+                // Store path endpoint for navigation
+                const pathEnd = new THREE.Vector3(
+                    Math.cos(angle) * (size * 0.15 + length), 
+                    size * 0.2, 
+                    Math.sin(angle) * (size * 0.15 + length)
+                );
+                
+                pathEnds.push(pathEnd);
+                islandGroup.userData.paths.push({
+                    start: new THREE.Vector3(0, size * 0.2, 0),
+                    end: pathEnd,
+                    width: width
+                });
+                
+                islandGroup.add(path);
+            }
+            
+            // Connect paths with circular intersections
+            for (let i = 0; i < pathEnds.length; i++) {
+                for (let j = i + 1; j < pathEnds.length; j++) {
+                    // Only connect some paths, not all
+                    if (Math.random() > 0.7) {
+                        const start = pathEnds[i];
+                        const end = pathEnds[j];
+                        
+                        const direction = new THREE.Vector3().subVectors(end, start);
+                        const length = direction.length();
+                        const width = 3 + Math.random() * 2;
+                        
+                        const connectionGeometry = new THREE.PlaneGeometry(width, length);
+                        const connection = new THREE.Mesh(connectionGeometry, pathMaterial);
+                        
+                        // Position and rotate the connecting path
+                        connection.position.copy(start.clone().add(direction.clone().multiplyScalar(0.5)));
+                        connection.position.y += 0.05;
+                        connection.rotation.x = -Math.PI / 2;
+                        connection.rotation.z = Math.atan2(direction.z, direction.x);
+                        connection.receiveShadow = true;
+                        
+                        islandGroup.add(connection);
+                        
+                        // Add to navigable paths
+                        islandGroup.userData.paths.push({
+                            start: start.clone(),
+                            end: end.clone(),
+                            width: width
+                        });
+                    }
+                }
+            }
+            
+            // Add all paths to global collection for navigation
+            for (const path of islandGroup.userData.paths) {
+                // Transform to world coordinates
+                const worldStart = path.start.clone().applyMatrix4(islandGroup.matrixWorld);
+                const worldEnd = path.end.clone().applyMatrix4(islandGroup.matrixWorld);
+                
+                allPaths.push({
+                    start: worldStart,
+                    end: worldEnd,
+                    width: path.width,
+                    island: islandGroup
+                });
+            }
+        }
+
+        // Populate an island with vegetation and buildings
+        function populateIsland(island) {
+            const size = island.userData.size;
+            
+            // Add palm trees
+            const treeCount = Math.floor(size / 4);
+            for (let i = 0; i < treeCount; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const radius = Math.random() * (size * 0.7);
+                const treeX = Math.cos(angle) * radius;
+                const treeZ = Math.sin(angle) * radius;
+                
+                // Sample height at this position (approximate using noise)
+                const heightVariation = 0.5 + 0.5 * noise.noise2D(treeX * 0.01, treeZ * 0.01);
+                const treeY = size * 0.2 * heightVariation;
+                
+                // Only place trees on the elevated part
+                if (Math.sqrt(treeX * treeX + treeZ * treeZ) < size * 0.7) {
+                    createPalmTree(island, treeX, treeY, treeZ, 1 + Math.random() * 0.5);
+                }
+            }
+            
+            // Add colonial buildings clustered around paths
+            const buildingCount = Math.floor(size / 10);
+            for (let i = 0; i < buildingCount; i++) {
+                // Place buildings near paths
+                if (island.userData.paths.length > 0) {
+                    const pathIndex = Math.floor(Math.random() * island.userData.paths.length);
+                    const path = island.userData.paths[pathIndex];
+                    
+                    // Position along the path
+                    const t = Math.random();
+                    const buildingX = path.start.x * (1 - t) + path.end.x * t;
+                    const buildingZ = path.start.z * (1 - t) + path.end.z * t;
+                    
+                    // Offset from the path
+                    const perpAngle = Math.atan2(path.end.z - path.start.z, path.end.x - path.start.x) + Math.PI / 2;
+                    const offset = (path.width / 2 + 2 + Math.random() * 4) * (Math.random() > 0.5 ? 1 : -1);
+                    
+                    const finalX = buildingX + Math.cos(perpAngle) * offset;
+                    const finalZ = buildingZ + Math.sin(perpAngle) * offset;
+                    
+                    // Check if position is within island bounds
+                    if (Math.sqrt(finalX * finalX + finalZ * finalZ) < size * 0.7) {
+                        createColonialBuilding(island, finalX, size * 0.2, finalZ, perpAngle);
+                    }
+                } else {
+                    // Fallback random placement
+                    const angle = Math.random() * Math.PI * 2;
+                    const radius = Math.random() * (size * 0.6);
+                    const buildingX = Math.cos(angle) * radius;
+                    const buildingZ = Math.sin(angle) * radius;
+                    
+                    createColonialBuilding(island, buildingX, size * 0.2, buildingZ, angle);
+                }
+            }
+            
+            // Add a plantation
+            if (size > 40 && Math.random() > 0.5) {
+                createPlantation(island, size);
+            }
+            
+            // Add a watchtower
+            if (Math.random() > 0.3) {
+                const angle = Math.random() * Math.PI * 2;
+                const radius = size * 0.5;
+                const towerX = Math.cos(angle) * radius;
+                const towerZ = Math.sin(angle) * radius;
+                
+                createWatchtower(island, towerX, size * 0.2, towerZ);
+            }
+            
+            // Add warehouses near docks
+            for (const dock of island.userData.docks) {
+                const warehousePosition = dock.position.clone();
+                warehousePosition.add(new THREE.Vector3(
+                    Math.cos(dock.userData.dockAngle) * 10,
+                    0,
+                    Math.sin(dock.userData.dockAngle) * 10
+                ));
+                
+                createWarehouse(island, warehousePosition.x, size * 0.2, warehousePosition.z, dock.userData.dockAngle);
+            }
+        }
+        
+        // Create a colonial-style building
+        function createColonialBuilding(parent, x, y, z, orientation) {
+            const buildingGroup = new THREE.Group();
+            buildingGroup.position.set(x, y, z);
+            buildingGroup.rotation.y = orientation;
+            
+            // Building size variations
+            const width = 4 + Math.random() * 4;
+            const height = 3 + Math.random() * 3;
+            const depth = 4 + Math.random() * 4;
+            
+            // Colonial building colors
+            const buildingColors = [0xfbf2d5, 0xf2d6bd, 0xeedcc5, 0xe6c9a8, 0xd9c0b4];
+            const buildingColor = buildingColors[Math.floor(Math.random() * buildingColors.length)];
+            
+            // Main building structure
+            const buildingGeometry = new THREE.BoxGeometry(width, height, depth);
+            const buildingMaterial = new THREE.MeshLambertMaterial({ color: buildingColor });
+            const building = new THREE.Mesh(buildingGeometry, buildingMaterial);
+            building.position.y = height / 2;
+            building.castShadow = true;
+            building.receiveShadow = true;
+            buildingGroup.add(building);
+            
+            // Roof
+            const roofColors = [0x8b4513, 0x654321, 0x8b0000];
+            const roofColor = roofColors[Math.floor(Math.random() * roofColors.length)];
+            
+            if (Math.random() > 0.5) {
+                // Hip roof
+                const roofGeometry = new THREE.ConeGeometry(Math.sqrt(width * width + depth * depth) / 1.5, height * 0.5, 4);
+                const roofMaterial = new THREE.MeshLambertMaterial({ color: roofColor });
+                const roof = new THREE.Mesh(roofGeometry, roofMaterial);
+                roof.position.y = height + height * 0.25;
+                roof.rotation.y = Math.PI / 4;
+                roof.castShadow = true;
+                buildingGroup.add(roof);
+            } else {
+                // Gabled roof
+                const roofGeometry = new THREE.BufferGeometry();
+                const vertices = [
+                    -width/2, height, -depth/2,  // Front left
+                    width/2, height, -depth/2,   // Front right
+                    width/2, height, depth/2,    // Back right
+                    -width/2, height, depth/2,   // Back left
+                    0, height + height * 0.5, 0  // Peak
+                ];
+                
+                const indices = [
+                    0, 1, 4,  // Front face
+                    1, 2, 4,  // Right face
+                    2, 3, 4,  // Back face
+                    3, 0, 4   // Left face
+                ];
+                
+                roofGeometry.setIndex(indices);
+                roofGeometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+                roofGeometry.computeVertexNormals();
+                
+                const roofMaterial = new THREE.MeshLambertMaterial({ color: roofColor });
+                const roof = new THREE.Mesh(roofGeometry, roofMaterial);
+                roof.castShadow = true;
+                buildingGroup.add(roof);
+            }
+            
+            // Add windows and doors
+            addBuildingDetails(building, width, height, depth);
+            
+            // Add a balcony or porch (colonial feature)
+            if (Math.random() > 0.6) {
+                const porchWidth = width * 0.8;
+                const porchDepth = depth * 0.3;
+                
+                const porchGeometry = new THREE.BoxGeometry(porchWidth, 0.2, porchDepth);
+                const porchMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+                const porch = new THREE.Mesh(porchGeometry, porchMaterial);
+                porch.position.set(0, 0.1, depth/2 + porchDepth/2);
+                porch.castShadow = true;
+                porch.receiveShadow = true;
+                buildingGroup.add(porch);
+                
+                // Add columns
+                for (let i = -1; i <= 1; i += 2) {
+                    const columnGeometry = new THREE.CylinderGeometry(0.2, 0.2, height, 8);
+                    const column = new THREE.Mesh(columnGeometry, buildingMaterial);
+                    column.position.set(i * porchWidth/3, height/2, depth/2 + porchDepth);
+                    column.castShadow = true;
+                    buildingGroup.add(column);
+                }
+            }
+            
+            parent.add(buildingGroup);
+            return buildingGroup;
+        }
+        
+        // Create a watchtower for island defense
+        function createWatchtower(parent, x, y, z) {
+            const towerGroup = new THREE.Group();
+            towerGroup.position.set(x, y, z);
+            
+            // Tower base
+            const baseHeight = 8 + Math.random() * 4;
+            const baseRadius = 2 + Math.random();
+            const baseGeometry = new THREE.CylinderGeometry(baseRadius, baseRadius * 1.2, baseHeight, 8);
+            const baseMaterial = new THREE.MeshLambertMaterial({ color: 0xd9d9d9 });
+            const base = new THREE.Mesh(baseGeometry, baseMaterial);
+            base.position.y = baseHeight / 2;
+            base.castShadow = true;
+            base.receiveShadow = true;
+            towerGroup.add(base);
+            
+            // Tower top (observation deck)
+            const topRadius = baseRadius * 1.3;
+            const topHeight = baseRadius * 0.5;
+            const topGeometry = new THREE.CylinderGeometry(topRadius, topRadius, topHeight, 8);
+            const top = new THREE.Mesh(topGeometry, baseMaterial);
+            top.position.y = baseHeight + topHeight / 2;
+            top.castShadow = true;
+            towerGroup.add(top);
+            
+            // Roof cone
+            const roofGeometry = new THREE.ConeGeometry(topRadius * 1.2, topRadius * 2, 8);
+            const roofMaterial = new THREE.MeshLambertMaterial({ color: 0x8B0000 });
+            const roof = new THREE.Mesh(roofGeometry, roofMaterial);
+            roof.position.y = baseHeight + topHeight + topRadius;
+            roof.castShadow = true;
+            towerGroup.add(roof);
+            
+            // Windows
+            const windowCount = 4;
+            for (let i = 0; i < windowCount; i++) {
+                const angle = (i / windowCount) * Math.PI * 2;
+                const windowGeometry = new THREE.BoxGeometry(0.8, 1.2, 0.2);
+                const windowMaterial = new THREE.MeshLambertMaterial({ color: 0xadd8e6 });
+                const window = new THREE.Mesh(windowGeometry, windowMaterial);
+                
+                window.position.set(
+                    Math.cos(angle) * (baseRadius + 0.1),
+                    baseHeight - 1,
+                    Math.sin(angle) * (baseRadius + 0.1)
+                );
+                window.rotation.y = angle;
+                towerGroup.add(window);
+            }
+            
+            // Observation windows on top
+            for (let i = 0; i < windowCount; i++) {
+                const angle = (i / windowCount) * Math.PI * 2;
+                const windowGeometry = new THREE.BoxGeometry(1.2, 1, 0.2);
+                const windowMaterial = new THREE.MeshLambertMaterial({ color: 0xadd8e6 });
+                const window = new THREE.Mesh(windowGeometry, windowMaterial);
+                
+                window.position.set(
+                    Math.cos(angle) * (topRadius + 0.1),
+                    baseHeight + topHeight / 2,
+                    Math.sin(angle) * (topRadius + 0.1)
+                );
+                window.rotation.y = angle;
+                towerGroup.add(window);
+            }
+            
+            // Door
+            const doorGeometry = new THREE.BoxGeometry(1.5, 3, 0.2);
+            const doorMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+            const door = new THREE.Mesh(doorGeometry, doorMaterial);
+            door.position.set(0, 1.5, baseRadius + 0.1);
+            towerGroup.add(door);
+            
+            parent.add(towerGroup);
+            return towerGroup;
+        }
+        
+        // Create a plantation with fields and main house
+        function createPlantation(parent, islandSize) {
+            const plantationGroup = new THREE.Group();
+            
+            // Choose a location away from center
+            const angle = Math.random() * Math.PI * 2;
+            const distance = islandSize * 0.4;
+            plantationGroup.position.set(
+                Math.cos(angle) * distance,
+                islandSize * 0.2,
+                Math.sin(angle) * distance
+            );
+            
+            // Create main plantation house (larger colonial building)
+            const houseWidth = 8 + Math.random() * 4;
+            const houseHeight = 6 + Math.random() * 2;
+            const houseDepth = 10 + Math.random() * 4;
+            
+            const houseGeometry = new THREE.BoxGeometry(houseWidth, houseHeight, houseDepth);
+            const houseMaterial = new THREE.MeshLambertMaterial({ color: 0xfbf2d5 });
+            const house = new THREE.Mesh(houseGeometry, houseMaterial);
+            house.position.y = houseHeight / 2;
+            house.castShadow = true;
+            house.receiveShadow = true;
+            plantationGroup.add(house);
+            
+            // Add roof
+            const roofGeometry = new THREE.BoxGeometry(houseWidth * 1.2, houseHeight * 0.4, houseDepth * 1.2);
+            const roofMaterial = new THREE.MeshLambertMaterial({ color: 0x8B0000 });
+            const roof = new THREE.Mesh(roofGeometry, roofMaterial);
+            roof.position.y = houseHeight + houseHeight * 0.2;
+            roof.castShadow = true;
+            plantationGroup.add(roof);
+            
+            // Add columns for plantation house veranda
+            for (let x = -1; x <= 1; x += 0.5) {
+                const columnGeometry = new THREE.CylinderGeometry(0.3, 0.3, houseHeight, 8);
+                const column = new THREE.Mesh(columnGeometry, houseMaterial);
+                column.position.set(x * (houseWidth / 2), houseHeight / 2, houseDepth / 2 + 1);
+                column.castShadow = true;
+                plantationGroup.add(column);
+            }
+            
+            // Create plantation fields
+            const fieldCount = 2 + Math.floor(Math.random() * 3);
+            const fieldSize = 10 + Math.random() * 10;
+            
+            for (let i = 0; i < fieldCount; i++) {
+                const fieldAngle = angle + (i / fieldCount) * Math.PI - Math.PI / 2;
+                const fieldDistance = 15 + Math.random() * 10;
+                
+                const fieldX = Math.cos(fieldAngle) * fieldDistance;
+                const fieldZ = Math.sin(fieldAngle) * fieldDistance;
+                
+                createCropField(plantationGroup, fieldX, 0, fieldZ, fieldSize);
+            }
+            
+            // Create small worker cabins
+            const cabinCount = 2 + Math.floor(Math.random() * 3);
+            
+            for (let i = 0; i < cabinCount; i++) {
+                const cabinAngle = angle + Math.PI / 2 + (i / cabinCount) * Math.PI * 0.8 - Math.PI * 0.4;
+                const cabinDistance = 20 + Math.random() * 5;
+                
+                const cabinX = Math.cos(cabinAngle) * cabinDistance;
+                const cabinZ = Math.sin(cabinAngle) * cabinDistance;
+                
+                createWorkerCabin(plantationGroup, cabinX, 0, cabinZ);
+            }
+            
+            parent.add(plantationGroup);
+        }
+        
+        // Create a crop field for plantations
+        function createCropField(parent, x, y, z, size) {
+            const fieldGroup = new THREE.Group();
+            fieldGroup.position.set(x, y, z);
+            
+            // Field ground
+            const fieldGeometry = new THREE.PlaneGeometry(size, size);
+            const fieldMaterial = new THREE.MeshLambertMaterial({ 
+                color: 0x556B2F,
+                side: THREE.DoubleSide
+            });
+            const field = new THREE.Mesh(fieldGeometry, fieldMaterial);
+            field.rotation.x = -Math.PI / 2;
+            field.position.y = 0.1;
+            field.receiveShadow = true;
+            fieldGroup.add(field);
+            
+            // Add crop rows
+            const rowCount = Math.floor(size / 2);
+            const cropMaterial = new THREE.MeshLambertMaterial({ color: 0x7CFC00 });
+            
+            for (let i = 0; i < rowCount; i++) {
+                const rowGeometry = new THREE.BoxGeometry(size - 1, 0.5, 0.8);
+                const row = new THREE.Mesh(rowGeometry, cropMaterial);
+                row.position.set(0, 0.3, (i / rowCount) * size - size/2 + size/(rowCount*2));
+                row.castShadow = true;
+                row.receiveShadow = true;
+                fieldGroup.add(row);
+            }
+            
+            parent.add(fieldGroup);
+        }
+        
+        // Create a small worker cabin for plantations
+        function createWorkerCabin(parent, x, y, z) {
+            const cabinGroup = new THREE.Group();
+            cabinGroup.position.set(x, y, z);
+            
+            // Simple cabin
+            const cabinWidth = 3 + Math.random();
+            const cabinHeight = 2 + Math.random();
+            const cabinDepth = 4 + Math.random();
+            
+            const cabinGeometry = new THREE.BoxGeometry(cabinWidth, cabinHeight, cabinDepth);
+            const cabinMaterial = new THREE.MeshLambertMaterial({ color: 0xa0522d });
+            const cabin = new THREE.Mesh(cabinGeometry, cabinMaterial);
+            cabin.position.y = cabinHeight / 2;
+            cabin.castShadow = true;
+            cabin.receiveShadow = true;
+            cabinGroup.add(cabin);
+            
+            // Simple roof
+            const roofHeight = cabinHeight * 0.8;
+            const roofGeometry = new THREE.ConeGeometry(Math.sqrt(cabinWidth*cabinWidth + cabinDepth*cabinDepth) / 1.5, roofHeight, 4);
+            const roofMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+            const roof = new THREE.Mesh(roofGeometry, roofMaterial);
+            roof.position.y = cabinHeight + roofHeight / 2;
+            roof.rotation.y = Math.PI / 4;
+            roof.castShadow = true;
+            cabinGroup.add(roof);
+            
+            // Door
+            const doorGeometry = new THREE.BoxGeometry(cabinWidth * 0.4, cabinHeight * 0.8, 0.1);
+            const doorMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+            const door = new THREE.Mesh(doorGeometry, doorMaterial);
+            door.position.set(0, cabinHeight * 0.4, cabinDepth / 2 + 0.05);
+            cabinGroup.add(door);
+            
+            parent.add(cabinGroup);
+        }
+        
+        // Create a warehouse for storing goods
+        function createWarehouse(parent, x, y, z, orientation) {
+            const warehouseGroup = new THREE.Group();
+            warehouseGroup.position.set(x, y, z);
+            warehouseGroup.rotation.y = orientation;
+            
+            // Large warehouse structure
+            const width = 8 + Math.random() * 4;
+            const height = 4 + Math.random() * 2;
+            const depth = 12 + Math.random() * 6;
+            
+            const warehouseGeometry = new THREE.BoxGeometry(width, height, depth);
+            const warehouseMaterial = new THREE.MeshLambertMaterial({ color: 0xd9c0b4 });
+            const warehouse = new THREE.Mesh(warehouseGeometry, warehouseMaterial);
+            warehouse.position.y = height / 2;
+            warehouse.castShadow = true;
+            warehouse.receiveShadow = true;
+            warehouseGroup.add(warehouse);
+            
+            // Simple flat roof
+            const roofGeometry = new THREE.BoxGeometry(width, height * 0.2, depth);
+            const roofMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+            const roof = new THREE.Mesh(roofGeometry, roofMaterial);
+            roof.position.y = height + height * 0.1;
+            roof.castShadow = true;
+            warehouseGroup.add(roof);
+            
+            // Large cargo doors
+            const doorWidth = width * 0.6;
+            const doorHeight = height * 0.8;
+            const doorGeometry = new THREE.BoxGeometry(doorWidth, doorHeight, 0.2);
+            const doorMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+            
+            // Front door
+            const frontDoor = new THREE.Mesh(doorGeometry, doorMaterial);
+            frontDoor.position.set(0, doorHeight / 2, depth / 2 + 0.1);
+            warehouseGroup.add(frontDoor);
+            
+            // Back door
+            const backDoor = new THREE.Mesh(doorGeometry, doorMaterial);
+            backDoor.position.set(0, doorHeight / 2, -depth / 2 - 0.1);
+            warehouseGroup.add(backDoor);
+            
+            // Add cargo items outside
+            for (let i = 0; i < 3 + Math.floor(Math.random() * 4); i++) {
+                const crateSize = 1 + Math.random();
+                const crateGeometry = new THREE.BoxGeometry(crateSize, crateSize, crateSize);
+                const crateMaterial = new THREE.MeshLambertMaterial({ color: 0xD2B48C });
+                const crate = new THREE.Mesh(crateGeometry, crateMaterial);
+                
+                // Position crates around the warehouse
+                const angle = Math.random() * Math.PI * 2;
+                const distance = width/2 + 1 + Math.random() * 3;
+                
+                crate.position.set(
+                    Math.cos(angle) * distance,
+                    crateSize / 2,
+                    Math.sin(angle) * distance
+                );
+                crate.rotation.y = Math.random() * Math.PI * 2;
+                crate.castShadow = true;
+                crate.receiveShadow = true;
+                
+                warehouseGroup.add(crate);
+            }
+            
+            parent.add(warehouseGroup);
+        }
+        
+        // Add details to buildings (windows, doors)
+        function addBuildingDetails(building, width, height, depth) {
+            // Door
+            const doorWidth = Math.min(width * 0.4, 1.5);
+            const doorHeight = Math.min(height * 0.7, 2.5);
+            const doorGeometry = new THREE.BoxGeometry(doorWidth, doorHeight, depth * 0.1);
+            const doorMaterial = new THREE.MeshLambertMaterial({ color: 0x5c4033 });
+            const door = new THREE.Mesh(doorGeometry, doorMaterial);
+            door.position.set(0, -height/2 + doorHeight/2, depth/2 + 0.01);
+            building.add(door);
+            
+            // Windows
+            const windowSize = Math.min(width * 0.2, 1);
+            const windowMaterial = new THREE.MeshLambertMaterial({ color: 0xadd8e6 });
+            
+            // Front windows
+            for (let i = -1; i <= 1; i += 2) {
+                const windowGeometry = new THREE.BoxGeometry(windowSize, windowSize, depth * 0.05);
+                const windowMesh = new THREE.Mesh(windowGeometry, windowMaterial);
+                windowMesh.position.set(i * width * 0.25, 0, depth/2 + 0.01);
+                building.add(windowMesh);
+                
+                // Second story windows if building is tall enough
+                if (height > 4) {
+                    const windowMesh2 = new THREE.Mesh(windowGeometry, windowMaterial);
+                    windowMesh2.position.set(i * width * 0.25, height * 0.4, depth/2 + 0.01);
+                    building.add(windowMesh2);
+                }
+            }
+            
+            // Side windows
+            for (let i = -1; i <= 1; i += 2) {
+                const windowGeometry = new THREE.BoxGeometry(width * 0.05, windowSize, windowSize);
+                const windowMesh = new THREE.Mesh(windowGeometry, windowMaterial);
+                windowMesh.position.set(width/2 + 0.01, 0, i * depth * 0.25);
+                building.add(windowMesh);
+                
+                // Second story side windows
+                if (height > 4) {
+                    const windowMesh2 = new THREE.Mesh(windowGeometry, windowMaterial);
+                    windowMesh2.position.set(width/2 + 0.01, height * 0.4, i * depth * 0.25);
+                    building.add(windowMesh2);
+                }
+            }
+        }
+        
+        // Create a palm tree
+        function createPalmTree(parent, x, y, z, scale) {
+            const treeGroup = new THREE.Group();
+            treeGroup.position.set(x, y, z);
+            
+            // Trunk
+            const trunkGeometry = new THREE.CylinderGeometry(scale * 0.2, scale * 0.3, scale * 5, 8);
+            const trunkMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+            const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+            trunk.position.y = scale * 2.5;
+            trunk.castShadow = true;
+            treeGroup.add(trunk);
+            
+            // Add some trunk detail (bent shape)
+            const bendAngle = Math.random() * 0.2;
+            trunk.rotation.x = bendAngle;
+            
+            // Leaves - create multiple leaf planes for more realistic look
+            const leafCount = 6 + Math.floor(Math.random() * 4);
+            
+            for (let i = 0; i < leafCount; i++) {
+                const leafGeometry = new THREE.PlaneGeometry(scale * 4, scale * 1.5);
+                const leafMaterial = new THREE.MeshLambertMaterial({ 
+                    color: 0x567d46, 
+                    side: THREE.DoubleSide 
+                });
+                const leaf = new THREE.Mesh(leafGeometry, leafMaterial);
+                
+                // Position at top of trunk
+                leaf.position.y = scale * 5;
+                
+                // Random rotation around trunk
+                leaf.rotation.y = (i / leafCount) * Math.PI * 2;
+                
+                // Random angle from trunk
+                leaf.rotation.x = Math.PI / 4 + (Math.random() * 0.2 - 0.1);
+                
+                leaf.castShadow = true;
+                treeGroup.add(leaf);
+            }
+            
+            // Add coconuts
+            if (Math.random() > 0.5) {
+                const coconutCount = 1 + Math.floor(Math.random() * 4);
+                
+                for (let i = 0; i < coconutCount; i++) {
+                    const coconutGeometry = new THREE.SphereGeometry(scale * 0.3, 8, 8);
+                    const coconutMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+                    const coconut = new THREE.Mesh(coconutGeometry, coconutMaterial);
+                    
+                    const angle = Math.random() * Math.PI * 2;
+                    const radius = scale * 0.5;
+                    
+                    coconut.position.set(
+                        Math.cos(angle) * radius,
+                        scale * 4.8,
+                        Math.sin(angle) * radius
+                    );
+                    
+                    coconut.castShadow = true;
+                    treeGroup.add(coconut);
+                }
+            }
+            
+            parent.add(treeGroup);
+            return treeGroup;
+        }
+
+        // Create a person with animation capabilities
+        function createPerson(x, y, z) {
+            const personGroup = new THREE.Group();
+            personGroup.position.set(x, y, z);
+            
+            // Random person color for clothing
+            const personColors = [0x8B4513, 0xD2691E, 0xF5DEB3, 0xBDB76B, 0xBC8F8F];
+            const personColor = personColors[Math.floor(Math.random() * personColors.length)];
+            const skinTones = [0xF5DEB3, 0xD2B48C, 0xBC8F8F, 0x8B4513];
+            const skinTone = skinTones[Math.floor(Math.random() * skinTones.length)];
+            
+            // Body
+            const bodyGeometry = new THREE.CylinderGeometry(0.4, 0.4, 1.5, 8);
+            const bodyMaterial = new THREE.MeshLambertMaterial({ color: personColor });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            body.position.y = 0.75;
+            body.castShadow = true;
+            personGroup.add(body);
+            
+            // Head
+            const headGeometry = new THREE.SphereGeometry(0.4, 16, 16);
+            const headMaterial = new THREE.MeshLambertMaterial({ color: skinTone });
+            const head = new THREE.Mesh(headGeometry, headMaterial);
+            head.position.y = 1.85;
+            head.castShadow = true;
+            personGroup.add(head);
+            
+            // Arms
+            const arms = [];
+            for (let i = -1; i <= 1; i += 2) {
+                const armGeometry = new THREE.CylinderGeometry(0.15, 0.15, 1, 8);
+                const arm = new THREE.Mesh(armGeometry, bodyMaterial);
+                arm.position.set(i * 0.5, 0.75, 0);
+                arm.rotation.z = i * Math.PI / 6;
+                arm.castShadow = true;
+                personGroup.add(arm);
+                arms.push(arm);
+            }
+            
+            // Legs
+            const legs = [];
+            for (let i = -1; i <= 1; i += 2) {
+                const legGeometry = new THREE.CylinderGeometry(0.2, 0.2, 1, 8);
+                const legMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+                const leg = new THREE.Mesh(legGeometry, legMaterial);
+                leg.position.set(i * 0.25, -0.25, 0);
+                leg.castShadow = true;
+                personGroup.add(leg);
+                legs.push(leg);
+            }
+            
+            // Add animation data
+            personGroup.userData = {
+                limbs: {
+                    arms: arms,
+                    legs: legs,
+                    head: head
+                },
+                state: 'idle', // idle, walking, working
+                path: null,
+                pathProgress: 0,
+                speed: 0.5 + Math.random() * 0.5,
+                animationTime: Math.random() * Math.PI * 2 // Offset animation cycles
+            };
+            
+            scene.add(personGroup);
+            people.push(personGroup);
+            
+            return personGroup;
+        }
+
+        // Create a sailing ship
+        function createSailingShip(x, z, rotation) {
+            const shipGroup = new THREE.Group();
+            shipGroup.position.set(x, 0, z);
+            shipGroup.rotation.y = rotation;
+            
+            // Hull
+            const hullGeometry = new THREE.BoxGeometry(10, 3, 30);
+            const hullMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+            const hull = new THREE.Mesh(hullGeometry, hullMaterial);
+            hull.position.y = 1.5;
+            hull.castShadow = true;
+            shipGroup.add(hull);
+            
+            // Deck
+            const deckGeometry = new THREE.BoxGeometry(9, 0.5, 28);
+            const deckMaterial = new THREE.MeshLambertMaterial({ color: 0xD2B48C });
+            const deck = new THREE.Mesh(deckGeometry, deckMaterial);
+            deck.position.y = 3.25;
+            shipGroup.add(deck);
+            
+            // Front tip (bow)
+            const bowGeometry = new THREE.ConeGeometry(5, 10, 8, 1, false, Math.PI / 2);
+            const bow = new THREE.Mesh(bowGeometry, hullMaterial);
+            bow.rotation.z = Math.PI / 2;
+            bow.position.set(0, 1.5, 15);
+            shipGroup.add(bow);
+            
+            // Rear structure (stern)
+            const sternGeometry = new THREE.BoxGeometry(10, 6, 5);
+            const stern = new THREE.Mesh(sternGeometry, hullMaterial);
+            stern.position.set(0, 4.5, -13.5);
+            stern.castShadow = true;
+            shipGroup.add(stern);
+            
+            // Cabin windows
+            for (let i = -1; i <= 1; i += 0.5) {
+                const windowGeometry = new THREE.BoxGeometry(1, 1, 0.2);
+                const windowMaterial = new THREE.MeshLambertMaterial({ color: 0xadd8e6 });
+                const windowMesh = new THREE.Mesh(windowGeometry, windowMaterial);
+                windowMesh.position.set(i * 3, 4.5, -16);
+                stern.add(windowMesh);
+            }
+            
+            // Masts
+            const mastCount = Math.floor(Math.random() * 2) + 2; // 2-3 masts
+            const mastPositions = [-8, 0, 8];
+            
+            for (let i = 0; i < mastCount; i++) {
+                const mastHeight = 16 + Math.random() * 4;
+                const mastGeometry = new THREE.CylinderGeometry(0.5, 0.5, mastHeight, 8);
+                const mastMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+                const mast = new THREE.Mesh(mastGeometry, mastMaterial);
+                mast.position.set(0, mastHeight/2 + 3.5, mastPositions[i]);
+                mast.castShadow = true;
+                shipGroup.add(mast);
+                
+                // Add sails to each mast
+                addSails(mast, mastHeight);
+                
+                // Add horizontal spars
+                const sparGeometry = new THREE.CylinderGeometry(0.2, 0.2, 9, 8);
+                const spar = new THREE.Mesh(sparGeometry, mastMaterial);
+                spar.rotation.z = Math.PI / 2;
+                spar.position.y = mastHeight / 3;
+                mast.add(spar);
+                
+                // Add ropes (simple lines)
+                const ropeGeometry = new THREE.CylinderGeometry(0.05, 0.05, mastHeight * 0.9, 4);
+                const ropeMaterial = new THREE.MeshBasicMaterial({ color: 0x8B4513 });
+                
+                for (let j = -1; j <= 1; j += 2) {
+                    const rope = new THREE.Mesh(ropeGeometry, ropeMaterial);
+                    rope.position.set(j * 4, -mastHeight * 0.45, 0);
+                    rope.rotation.z = j * 0.3;
+                    mast.add(rope);
+                }
+            }
+            
+            // Add ship crew
+            const crewCount = 3 + Math.floor(Math.random() * 4);
+            for (let i = 0; i < crewCount; i++) {
+                const crewX = (Math.random() - 0.5) * 8;
+                const crewZ = (Math.random() - 0.5) * 24;
+                
+                // Create smaller scale crew members
+                const crewMember = createShipCrewMember(crewX, 3.5, crewZ);
+                shipGroup.add(crewMember);
+            }
+            
+            // Add ship state information
+            shipGroup.userData = {
+                state: 'sailing', // sailing, docking, departing
+                targetDock: null,
+                arrivalPoint: null,
+                departurePoint: null,
+                speed: 0.2 + Math.random() * 0.2,
+                direction: new THREE.Vector3(Math.sin(rotation), 0, Math.cos(rotation)),
+                animationTime: Math.random() * Math.PI * 2
+            };
+            
+            scene.add(shipGroup);
+            ships.push(shipGroup);
+            
+            return shipGroup;
+        }
+        
+        // Create crew member for ships
+        function createShipCrewMember(x, y, z) {
+            const crewGroup = new THREE.Group();
+            crewGroup.position.set(x, y, z);
+            
+            // Scale down for ship proportions
+            crewGroup.scale.set(0.7, 0.7, 0.7);
+            
+            // Random person color for clothing
+            const personColors = [0x000080, 0xD2691E, 0xF5DEB3, 0x191970];
+            const personColor = personColors[Math.floor(Math.random() * personColors.length)];
+            const skinTones = [0xF5DEB3, 0xD2B48C, 0xBC8F8F, 0x8B4513];
+            const skinTone = skinTones[Math.floor(Math.random() * skinTones.length)];
+            
+            // Body
+            const bodyGeometry = new THREE.CylinderGeometry(0.4, 0.4, 1.5, 8);
+            const bodyMaterial = new THREE.MeshLambertMaterial({ color: personColor });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            body.position.y = 0.75;
+            body.castShadow = true;
+            crewGroup.add(body);
+            
+            // Head
+            const headGeometry = new THREE.SphereGeometry(0.4, 16, 16);
+            const headMaterial = new THREE.MeshLambertMaterial({ color: skinTone });
+            const head = new THREE.Mesh(headGeometry, headMaterial);
+            head.position.y = 1.85;
+            head.castShadow = true;
+            crewGroup.add(head);
+            
+            // Arms
+            for (let i = -1; i <= 1; i += 2) {
+                const armGeometry = new THREE.CylinderGeometry(0.15, 0.15, 1, 8);
+                const arm = new THREE.Mesh(armGeometry, bodyMaterial);
+                arm.position.set(i * 0.5, 0.75, 0);
+                arm.rotation.z = i * Math.PI / 6;
+                arm.castShadow = true;
+                crewGroup.add(arm);
+            }
+            
+            // Legs
+            for (let i = -1; i <= 1; i += 2) {
+                const legGeometry = new THREE.CylinderGeometry(0.2, 0.2, 1, 8);
+                const legMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+                const leg = new THREE.Mesh(legGeometry, legMaterial);
+                leg.position.set(i * 0.25, -0.25, 0);
+                leg.castShadow = true;
+                crewGroup.add(leg);
+            }
+            
+            // Add a sailor hat
+            const hatGeometry = new THREE.CylinderGeometry(0.5, 0.5, 0.2, 8);
+            const hatMaterial = new THREE.MeshLambertMaterial({ color: 0xF5F5F5 });
+            const hat = new THREE.Mesh(hatGeometry, hatMaterial);
+            hat.position.y = 2.2;
+            hat.castShadow = true;
+            crewGroup.add(hat);
+            
+            return crewGroup;
+        }
+        
+        // Add sails to masts
+        function addSails(mast, mastHeight) {
+            const sailCount = Math.floor(Math.random() * 2) + 2; // 2-3 sails per mast
+            
+            for (let i = 0; i < sailCount; i++) {
+                const sailHeight = mastHeight / (sailCount + 1);
+                const yPos = (i + 1) * sailHeight - mastHeight / 2;
+                
+                const sailGeometry = new THREE.PlaneGeometry(10, sailHeight * 0.8);
+                const sailMaterial = new THREE.MeshLambertMaterial({ 
+                    color: 0xFFFAF0, 
+                    side: THREE.DoubleSide 
+                });
+                const sail = new THREE.Mesh(sailGeometry, sailMaterial);
+                sail.rotation.y = Math.PI / 2;
+                sail.position.y = yPos;
+                sail.castShadow = true;
+                mast.add(sail);
+            }
+        }
+
+        // Assign a path to a person
+        function assignPersonPath(person) {
+            if (!allPaths.length) return;
+            
+            // Choose a random path
+            const pathIndex = Math.floor(Math.random() * allPaths.length);
+            const path = allPaths[pathIndex];
+            
+            // 50% chance to reverse the path direction
+            const reversed = Math.random() > 0.5;
+            const start = reversed ? path.end.clone() : path.start.clone();
+            const end = reversed ? path.start.clone() : path.end.clone();
+            
+            person.userData.path = { start, end };
+            person.userData.pathProgress = 0;
+            person.userData.state = 'walking';
+            
+            // Position at start of path
+            person.position.copy(start);
+            
+            // Orient person along path
+            const direction = new THREE.Vector3().subVectors(end, start).normalize();
+            person.rotation.y = Math.atan2(direction.x, direction.z);
+        }
+
+        // Find an available dock for a ship
+        function findAvailableDock(ship) {
+            // Collect all docks from all islands
+            const allDocks = [];
+            for (const island of islands) {
+                allDocks.push(...island.userData.docks);
+            }
+            
+            // Filter out docks that are already in use
+            const availableDocks = allDocks.filter(dock => !dock.userData.inUse);
+            
+            if (availableDocks.length === 0) return null;
+            
+            // Choose a random available dock
+            const dock = availableDocks[Math.floor(Math.random() * availableDocks.length)];
+            dock.userData.inUse = true;
+            
+            // Get arrival point in world coordinates
+            const arrivalPoint = dock.userData.arrivalPoint.clone();
+            arrivalPoint.applyMatrix4(dock.matrixWorld);
+            
+            return {
+                dock: dock,
+                arrivalPoint: arrivalPoint,
+                dockAngle: dock.userData.dockAngle
+            };
+        }
+
+        // Update person animation and movement
+        function updatePeople(delta) {
+            for (const person of people) {
+                // Update animation time
+                person.userData.animationTime += delta * 2;
+                
+                // Handle states
+                switch (person.userData.state) {
+                    case 'idle':
+                        // Random chance to start walking
+                        if (Math.random() < 0.005) {
+                            assignPersonPath(person);
+                        }
+                        
+                        // Idle animation (slight movement)
+                        const idleSwayAmount = Math.sin(person.userData.animationTime * 0.5) * 0.02;
+                        person.rotation.z = idleSwayAmount;
+                        person.userData.limbs.head.rotation.z = -idleSwayAmount * 2;
+                        break;
+                        
+                    case 'walking':
+                        if (!person.userData.path) {
+                            person.userData.state = 'idle';
+                            break;
+                        }
+                        
+                        // Walking animation
+                        const walkCycle = Math.sin(person.userData.animationTime * 3);
+                        
+                        // Animate arms and legs
+                        person.userData.limbs.arms[0].rotation.x = walkCycle * 0.5;
+                        person.userData.limbs.arms[1].rotation.x = -walkCycle * 0.5;
+                        person.userData.limbs.legs[0].rotation.x = -walkCycle * 0.5;
+                        person.userData.limbs.legs[1].rotation.x = walkCycle * 0.5;
+                        
+                        // Progress along path
+                        person.userData.pathProgress += delta * person.userData.speed;
+                        
+                        if (person.userData.pathProgress >= 1) {
+                            // Path complete
+                            person.position.copy(person.userData.path.end);
+                            
+                            // 50% chance to return along the same path, 50% chance to go idle
+                            if (Math.random() > 0.5) {
+                                // Swap start and end
+                                const temp = person.userData.path.start.clone();
+                                person.userData.path.start = person.userData.path.end.clone();
+                                person.userData.path.end = temp;
+                                person.userData.pathProgress = 0;
+                                
+                                // Update orientation
+                                const direction = new THREE.Vector3().subVectors(
+                                    person.userData.path.end, 
+                                    person.userData.path.start
+                                ).normalize();
+                                person.rotation.y = Math.atan2(direction.x, direction.z);
+                            } else {
+                                person.userData.state = 'idle';
+                                
+                                // Reset limbs
+                                person.userData.limbs.arms[0].rotation.x = 0;
+                                person.userData.limbs.arms[1].rotation.x = 0;
+                                person.userData.limbs.legs[0].rotation.x = 0;
+                                person.userData.limbs.legs[1].rotation.x = 0;
+                            }
+                        } else {
+                            // Interpolate position along path
+                            const pos = new THREE.Vector3().lerpVectors(
+                                person.userData.path.start,
+                                person.userData.path.end,
+                                person.userData.pathProgress
+                            );
+                            person.position.copy(pos);
+                        }
+                        break;
+                        
+                    case 'working':
+                        // Working animation (bend and stand up)
+                        const workCycle = Math.sin(person.userData.animationTime * 2);
+                        person.rotation.x = Math.max(0, workCycle) * 0.3;
+                        person.userData.limbs.arms[0].rotation.x = Math.max(0, workCycle) * 0.8;
+                        person.userData.limbs.arms[1].rotation.x = Math.max(0, workCycle) * 0.8;
+                        
+                        // Random chance to walk
+                        if (Math.random() < 0.003) {
+                            person.rotation.x = 0;
+                            assignPersonPath(person);
+                        }
+                        break;
+                }
+            }
+        }
+
+        // Update ship animation and movement
+        function updateShips(delta) {
+            for (const ship of ships) {
+                // Wave animation for ships
+                ship.userData.animationTime += delta;
+                const waveHeight = Math.sin(ship.userData.animationTime) * 0.5;
+                const waveRoll = Math.sin(ship.userData.animationTime * 0.8) * 0.03;
+                ship.position.y = waveHeight;
+                ship.rotation.z = waveRoll;
+                
+                // Handle ship states
+                switch (ship.userData.state) {
+                    case 'sailing':
+                        // Move ship forward in its direction
+                        ship.position.add(ship.userData.direction.clone().multiplyScalar(ship.userData.speed));
+                        
+                        // Randomly assign docking if we're far from land
+                        if (Math.random() < 0.002) {
+                            const dockInfo = findAvailableDock(ship);
+                            if (dockInfo) {
+                                ship.userData.state = 'docking';
+                                ship.userData.targetDock = dockInfo.dock;
+                                ship.userData.arrivalPoint = dockInfo.arrivalPoint;
+                                
+                                // Calculate direction to dock
+                                const toArrival = new THREE.Vector3().subVectors(
+                                    dockInfo.arrivalPoint, 
+                                    ship.position
+                                ).normalize();
+                                
+                                ship.userData.direction = toArrival;
+                                ship.rotation.y = Math.atan2(toArrival.x, toArrival.z);
+                            }
+                        }
+                        
+                        // Check if ship is out of bounds
+                        const distanceFromCenter = Math.sqrt(
+                            Math.pow(ship.position.x, 2) + 
+                            Math.pow(ship.position.z, 2)
+                        );
+                        
+                        if (distanceFromCenter > 1000) {
+                            // Reset ship to approach from opposite direction
+                            ship.position.set(
+                                -ship.position.x * 0.9,
+                                0,
+                                -ship.position.z * 0.9
+                            );
+                            
+                            // Point toward center
+                            const newDirection = new THREE.Vector3(
+                                -ship.position.x,
+                                0,
+                                -ship.position.z
+                            ).normalize();
+                            
+                            ship.rotation.y = Math.atan2(newDirection.x, newDirection.z);
+                            ship.userData.direction = newDirection.clone();
+                        }
+                        break;
+                        
+                    case 'docking':
+                        if (!ship.userData.arrivalPoint) {
+                            ship.userData.state = 'sailing';
+                            break;
+                        }
+                        
+                        // Move towards docking point
+                        const toArrival = new THREE.Vector3().subVectors(
+                            ship.userData.arrivalPoint,
+                            ship.position
+                        );
+                        
+                        const distanceToArrival = toArrival.length();
+                        
+                        if (distanceToArrival < 5) {
+                            // Reached arrival point, now dock
+                            ship.userData.state = 'docked';
+                            ship.userData.dockedTime = 0;
+                        } else {
+                            // Move towards arrival point, slow down as we approach
+                            const slowdownFactor = Math.min(1, distanceToArrival / 20);
+                            ship.position.add(
+                                toArrival.normalize().multiplyScalar(ship.userData.speed * slowdownFactor)
+                            );
+                        }
+                        break;
+                        
+                    case 'docked':
+                        // Stay docked for a while, then depart
+                        ship.userData.dockedTime += delta;
+                        
+                        if (ship.userData.dockedTime > 20) {
+                            ship.userData.state = 'departing';
+                            
+                            // Calculate departure direction (away from dock)
+                            const departureDir = new THREE.Vector3(
+                                -ship.userData.direction.x,
+                                0,
+                                -ship.userData.direction.z
+                            ).normalize();
+                            
+                            ship.userData.direction = departureDir;
+                            ship.rotation.y = Math.atan2(departureDir.x, departureDir.z);
+                        }
+                        break;
+                        
+                    case 'departing':
+                        // Move away from dock
+                        ship.position.add(ship.userData.direction.clone().multiplyScalar(ship.userData.speed));
+                        
+                        // Check if we're far enough away
+                        if (ship.userData.targetDock) {
+                            const departureDistance = new THREE.Vector3().subVectors(
+                                ship.position,
+                                ship.userData.arrivalPoint
+                            ).length();
+                            
+                            if (departureDistance > 50) {
+                                // Free up the dock
+                                ship.userData.targetDock.userData.inUse = false;
+                                ship.userData.targetDock = null;
+                                
+                                // Choose a random new direction
+                                const randomAngle = Math.random() * Math.PI * 2;
+                                const newDir = new THREE.Vector3(
+                                    Math.sin(randomAngle),
+                                    0,
+                                    Math.cos(randomAngle)
+                                );
+                                
+                                ship.userData.direction = newDir;
+                                ship.rotation.y = randomAngle;
+                                ship.userData.state = 'sailing';
+                            }
+                        } else {
+                            ship.userData.state = 'sailing';
+                        }
+                        break;
+                }
+            }
+        }
+
+        // Initialize the UI controls
+        function initUI() {
+            const gui = new dat.GUI();
+            
+            gui.add(SETTINGS, 'timeOfDay', 0, 24).step(0.1).onChange(updateTimeOfDay)
+               .name('Time of Day');
+            gui.add(SETTINGS, 'population', 10, 100).step(5).onChange(updatePopulation)
+               .name('Population');
+            gui.add(SETTINGS, 'islandCount', 1, 5).step(1).name('Island Count');
+            gui.add(SETTINGS, 'islandSize', 50, 150).step(10).name('Island Size');
+            gui.add(SETTINGS, 'treeCount', 20, 100).step(5).name('Tree Density');
+            gui.add(SETTINGS, 'shipCount', 2, 10).step(1).name('Ships');
+            gui.add(SETTINGS, 'showHelpers').name('Show Debug');
+            gui.add(SETTINGS, 'resetScene').name('Regenerate Scene');
+        }
+        
+        // Update population based on UI setting
+        function updatePopulation(value) {
+            // Remove excess people
+            while (people.length > value) {
+                const person = people.pop();
+                scene.remove(person);
+            }
+            
+            // Add new people
+            while (people.length < value) {
+                // Randomly place on an island
+                if (islands.length > 0) {
+                    const island = islands[Math.floor(Math.random() * islands.length)];
+                    const size = island.userData.size;
+                    
+                    const angle = Math.random() * Math.PI * 2;
+                    const radius = Math.random() * (size * 0.6);
+                    const x = Math.cos(angle) * radius + island.position.x;
+                    const z = Math.sin(angle) * radius + island.position.z;
+                    
+                    createPerson(x, size * 0.2, z);
+                }
+            }
+        }
+
+        // Generate the initial scene
+        function initScene() {
+            setupLighting();
+            createWater();
+            
+            // Generate islands
+            for (let i = 0; i < SETTINGS.islandCount; i++) {
+                const angle = (i / SETTINGS.islandCount) * Math.PI * 2;
+                const distance = 150 + Math.random() * 100;
+                
+                const x = Math.cos(angle) * distance;
+                const z = Math.sin(angle) * distance;
+                const size = SETTINGS.islandSize * (0.7 + Math.random() * 0.6);
+                
+                const island = createNaturalIsland(x, z, size);
+                populateIsland(island);
+                
+                scene.add(island);
+                islands.push(island);
+            }
+            
+            // Generate ships
+            for (let i = 0; i < SETTINGS.shipCount; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const distance = 300 + Math.random() * 200;
+                
+                const x = Math.cos(angle) * distance;
+                const z = Math.sin(angle) * distance;
+                
+                createSailingShip(x, z, Math.random() * Math.PI * 2);
+            }
+            
+            // Generate people
+            updatePopulation(SETTINGS.population);
+            
+            // Hide loading screen
+            document.getElementById('loading').style.display = 'none';
+        }
+        
+        // Reset and regenerate the scene
+        function resetSimulation() {
+            // Clear existing objects
+            while (islands.length > 0) {
+                const island = islands.pop();
+                scene.remove(island);
+            }
+            
+            while (ships.length > 0) {
+                const ship = ships.pop();
+                scene.remove(ship);
+            }
+            
+            while (people.length > 0) {
+                const person = people.pop();
+                scene.remove(person);
+            }
+            
+            allPaths = [];
+            
+            // Show loading message
+            document.getElementById('loading').style.display = 'block';
+            
+            // Regenerate scene after a brief delay
+            setTimeout(initScene, 100);
+        }
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const delta = clock.getDelta();
+            
+            // Update water animation
+            water.material.uniforms['time'].value += delta;
+            
+            // Update sun direction for water reflections
+            water.material.uniforms['sunDirection'].value.copy(sun.position).normalize();
+            
+            // Update people
+            updatePeople(delta);
+            
+            // Update ships
+            updateShips(delta);
+            
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // Initialize UI controls
+        initUI();
+        
+        // Initialize the scene
+        initScene();
+        
+        // Start animation loop
+        animate();
+    </script>
+</body>
+</html>
