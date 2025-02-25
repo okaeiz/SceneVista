@@ -1,0 +1,1639 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Tropical Forest Explorer</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.6);
+            color: white;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: Arial, sans-serif;
+            z-index: 100;
+        }
+        .control-group {
+            margin-bottom: 10px;
+        }
+        label {
+            display: inline-block;
+            width: 150px;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <h2>Forest Controls</h2>
+        <div class="control-group">
+            <label for="plantDensity">Plant Density:</label>
+            <input type="range" id="plantDensity" min="10" max="100" value="70">
+            <span id="plantDensityValue">70%</span>
+        </div>
+        <div class="control-group">
+            <label for="timeOfDay">Time of Day:</label>
+            <input type="range" id="timeOfDay" min="0" max="24" value="12" step="0.1">
+            <span id="timeOfDayValue">12:00</span>
+        </div>
+        <div class="control-group">
+            <label for="population">Human Population:</label>
+            <input type="range" id="population" min="0" max="100" value="50">
+            <span id="populationValue">50%</span>
+        </div>
+        <div class="control-group">
+            <label for="weather">Weather:</label>
+            <select id="weather">
+                <option value="clear">Clear</option>
+                <option value="cloudy">Cloudy</option>
+                <option value="rainy">Rainy</option>
+                <option value="foggy">Foggy</option>
+            </select>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/controls/FirstPersonControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/libs/stats.min.js"></script>
+    <script>
+        // Scene variables
+        let scene, camera, renderer, controls;
+        let terrain, sky;
+        let directionalLight, ambientLight;
+        let clock = new THREE.Clock();
+        let mixers = [];
+        let trees = [], animals = [], huts = [], torches = [];
+        let rainParticles, rainSystem;
+        let waterObjects = [];
+        
+        // Settings from UI controls
+        const settings = {
+            plantDensity: 70,
+            timeOfDay: 12,
+            population: 50,
+            weather: 'clear'
+        };
+
+        // Initialize the scene
+        function init() {
+            // Create scene
+            scene = new THREE.Scene();
+            
+            // Create camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 10000);
+            camera.position.set(0, 40, 100);
+            
+            // Create renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.body.appendChild(renderer.domElement);
+            
+            // Add controls
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.maxPolarAngle = Math.PI/2 - 0.1; // Prevent going below ground
+            
+            // Create terrain
+            createTerrain();
+            
+            // Create sky (MUST come before lighting)
+            createSky();
+            
+            // Create basic lighting (now after sky creation)
+            setupLighting();
+            
+            // Create mountains
+            createMountains();
+            
+            // Create water features (rivers, waterfalls)
+            createWaterFeatures();
+            
+            // Create forest
+            createForest();
+            
+            // Create animals
+            createAnimals();
+            
+            // Create human settlement
+            createSettlement();
+            
+            // Create weather effects
+            setupWeatherSystems();
+            
+            // Bind UI controls
+            setupUIControls();
+            
+            // Handle window resize
+            window.addEventListener('resize', onWindowResize, false);
+            
+            // Start animation loop
+            animate();
+        }
+        
+        function setupLighting() {
+            // Ambient light
+            ambientLight = new THREE.AmbientLight(0x404040, 0.5);
+            scene.add(ambientLight);
+            
+            // Directional light (sun)
+            directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+            directionalLight.position.set(100, 200, 100);
+            directionalLight.castShadow = true;
+            
+            // Configure shadow properties
+            directionalLight.shadow.mapSize.width = 2048;
+            directionalLight.shadow.mapSize.height = 2048;
+            directionalLight.shadow.camera.near = 0.5;
+            directionalLight.shadow.camera.far = 1000;
+            directionalLight.shadow.camera.left = -500;
+            directionalLight.shadow.camera.right = 500;
+            directionalLight.shadow.camera.top = 500;
+            directionalLight.shadow.camera.bottom = -500;
+            
+            scene.add(directionalLight);
+            
+            // Update lighting based on time of day
+            updateLighting();
+        }
+        
+        function createTerrain() {
+            // Create terrain using heightmap
+            const terrainSize = 2000;
+            const terrainResolution = 256;
+            const geometry = new THREE.PlaneGeometry(
+                terrainSize, terrainSize, 
+                terrainResolution - 1, terrainResolution - 1
+            );
+            
+            // Generate height data
+            const vertices = geometry.attributes.position.array;
+            for (let i = 0; i < vertices.length; i += 3) {
+                const x = vertices[i];
+                const z = vertices[i + 2];
+                
+                // Use simplex noise for more natural terrain
+                let height = simplex(x / 400, z / 400) * 50; // Large features
+                height += simplex(x / 100, z / 100) * 20;     // Medium features
+                height += simplex(x / 30, z / 30) * 5;        // Small features
+                
+                // Flatten the center for the village
+                const distFromCenter = Math.sqrt(x*x + z*z);
+                if (distFromCenter < 100) {
+                    const smoothFactor = Math.max(0, (distFromCenter - 50) / 50);
+                    height *= smoothFactor;
+                }
+                
+                vertices[i + 1] = height;
+            }
+            
+            // Update geometry
+            geometry.computeVertexNormals();
+            geometry.rotateX(-Math.PI / 2); // Rotate to make it flat
+            
+            // Create material with grass texture
+            const material = new THREE.MeshStandardMaterial({
+                color: 0x4b9b3a, // Green
+                metalness: 0.1,
+                roughness: 0.9,
+            });
+            
+            // Create terrain mesh
+            terrain = new THREE.Mesh(geometry, material);
+            terrain.receiveShadow = true;
+            scene.add(terrain);
+        }
+        
+        function createSky() {
+            // Simple sky dome
+            const skyGeometry = new THREE.SphereGeometry(5000, 32, 32);
+            const skyMaterial = new THREE.MeshBasicMaterial({
+                color: 0x87CEEB, // Sky blue
+                side: THREE.BackSide
+            });
+            sky = new THREE.Mesh(skyGeometry, skyMaterial);
+            scene.add(sky);
+        }
+        
+        function createMountains() {
+            // Create distant mountains around the perimeter
+            for (let i = 0; i < 12; i++) {
+                const angle = (i / 12) * Math.PI * 2;
+                const radius = 900;
+                const x = Math.cos(angle) * radius;
+                const z = Math.sin(angle) * radius;
+                
+                const mountainGeometry = new THREE.ConeGeometry(
+                    Math.random() * 100 + 100,
+                    Math.random() * 200 + 300,
+                    8
+                );
+                
+                const mountainMaterial = new THREE.MeshStandardMaterial({
+                    color: 0x8c7853, // Brown
+                    metalness: 0.1,
+                    roughness: 0.9,
+                });
+                
+                const mountain = new THREE.Mesh(mountainGeometry, mountainMaterial);
+                mountain.position.set(x, -50, z);
+                mountain.castShadow = true;
+                mountain.receiveShadow = true;
+                scene.add(mountain);
+            }
+        }
+        
+        function createWaterFeatures() {
+            // Create rivers
+            createRiver();
+            
+            // Create waterfalls
+            createWaterfall(300, 50, -200, 40, 100);
+            createWaterfall(-350, 70, 250, 30, 80);
+        }
+        
+        function createRiver() {
+            // River curve
+            const curve = new THREE.CurvePath();
+            
+            // Add curve segments to form a river path
+            const start = new THREE.Vector3(-800, 5, -400);
+            const control1 = new THREE.Vector3(-400, 5, -200);
+            const control2 = new THREE.Vector3(0, 5, 100);
+            const end = new THREE.Vector3(800, 5, 400);
+            
+            const curveSegment1 = new THREE.CubicBezierCurve3(
+                start, 
+                start.clone().add(new THREE.Vector3(200, 0, 100)),
+                control1.clone().add(new THREE.Vector3(-200, 0, -100)),
+                control1
+            );
+            
+            const curveSegment2 = new THREE.CubicBezierCurve3(
+                control1,
+                control1.clone().add(new THREE.Vector3(200, 0, 100)),
+                control2.clone().add(new THREE.Vector3(-200, 0, -100)),
+                control2
+            );
+            
+            const curveSegment3 = new THREE.CubicBezierCurve3(
+                control2,
+                control2.clone().add(new THREE.Vector3(200, 0, 100)),
+                end.clone().add(new THREE.Vector3(-200, 0, -100)),
+                end
+            );
+            
+            curve.add(curveSegment1);
+            curve.add(curveSegment2);
+            curve.add(curveSegment3);
+            
+            // Create river geometry
+            const riverWidth = 30;
+            const riverGeometry = new THREE.BufferGeometry();
+            const vertices = [];
+            const uvs = [];
+            
+            // Create points along the curve
+            const numPoints = 100;
+            for (let i = 0; i < numPoints; i++) {
+                const t = i / (numPoints - 1);
+                const pt = curve.getPoint(t);
+                
+                // Get normal to curve in XZ plane
+                const tangent = curve.getTangent(t);
+                const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
+                
+                // Create vertices on either side of the curve
+                const v1 = pt.clone().add(normal.clone().multiplyScalar(riverWidth/2));
+                const v2 = pt.clone().add(normal.clone().multiplyScalar(-riverWidth/2));
+                
+                if (i > 0) {
+                    // Previous points
+                    const v3 = vertices[vertices.length - 6];
+                    const v4 = vertices[vertices.length - 3];
+                    
+                    // Add first triangle
+                    vertices.push(v1.x, v1.y, v1.z);
+                    vertices.push(v4, v1.y, v4);
+                    vertices.push(v3, v1.y, v3);
+                    
+                    // Add second triangle
+                    vertices.push(v1.x, v1.y, v1.z);
+                    vertices.push(v2.x, v2.y, v2.z);
+                    vertices.push(v4, v2.y, v4);
+                    
+                    // Add UVs
+                    uvs.push(0, t);
+                    uvs.push(1, t-1/(numPoints-1));
+                    uvs.push(0, t-1/(numPoints-1));
+                    
+                    uvs.push(0, t);
+                    uvs.push(1, t);
+                    uvs.push(1, t-1/(numPoints-1));
+                }
+                
+                // Store current vertices for next iteration
+                vertices.push(v1.x, v1.y, v1.z);
+                vertices.push(v2.x, v2.y, v2.z);
+            }
+            
+            riverGeometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+            riverGeometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+            riverGeometry.computeVertexNormals();
+            
+            // Create water material
+            const waterMaterial = new THREE.MeshStandardMaterial({
+                color: 0x0077be,
+                metalness: 0.9,
+                roughness: 0.1,
+                transparent: true,
+                opacity: 0.8
+            });
+            
+            const river = new THREE.Mesh(riverGeometry, waterMaterial);
+            river.receiveShadow = true;
+            scene.add(river);
+            
+            waterObjects.push(river);
+        }
+        
+        function createWaterfall(x, y, z, width, height) {
+            // Create waterfall with particle effect and base pool
+            
+            // Base pool (circular water area)
+            const poolGeometry = new THREE.CircleGeometry(width * 0.8, 32);
+            const waterMaterial = new THREE.MeshStandardMaterial({
+                color: 0x0077be,
+                metalness: 0.9,
+                roughness: 0.1,
+                transparent: true,
+                opacity: 0.8
+            });
+            
+            const pool = new THREE.Mesh(poolGeometry, waterMaterial);
+            pool.rotation.x = -Math.PI / 2;
+            pool.position.set(x, 5, z);
+            scene.add(pool);
+            waterObjects.push(pool);
+            
+            // Waterfall face
+            const waterfallGeometry = new THREE.PlaneGeometry(width, height);
+            const waterfallMaterial = new THREE.MeshStandardMaterial({
+                color: 0x0099ff,
+                transparent: true,
+                opacity: 0.7
+            });
+            
+            const waterfall = new THREE.Mesh(waterfallGeometry, waterfallMaterial);
+            waterfall.position.set(x, y/2 + 5, z);
+            scene.add(waterfall);
+            waterObjects.push(waterfall);
+            
+            // Add particle system for waterfall spray
+            const particleGeometry = new THREE.BufferGeometry();
+            const particleCount = 500;
+            
+            const positions = new Float32Array(particleCount * 3);
+            const velocities = new Float32Array(particleCount * 3);
+            
+            for (let i = 0; i < particleCount; i++) {
+                // Start position at top of waterfall with random offset
+                const ix = i * 3;
+                positions[ix] = x + (Math.random() - 0.5) * width * 0.8;
+                positions[ix + 1] = y + height/2 + 5;
+                positions[ix + 2] = z + (Math.random() - 0.5) * 2;
+                
+                // Initial velocity downward with slight outward spray
+                velocities[ix] = (Math.random() - 0.5) * 0.2;
+                velocities[ix + 1] = -Math.random() * 0.5 - 0.5; // Downward
+                velocities[ix + 2] = (Math.random() - 0.5) * 0.2;
+            }
+            
+            particleGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            particleGeometry.setAttribute('velocity', new THREE.BufferAttribute(velocities, 3));
+            
+            const particleMaterial = new THREE.PointsMaterial({
+                color: 0xffffff,
+                size: 0.8,
+                transparent: true,
+                opacity: 0.6
+            });
+            
+            const particles = new THREE.Points(particleGeometry, particleMaterial);
+            scene.add(particles);
+            waterObjects.push(particles);
+        }
+        
+        function createForest() {
+            // Clear existing trees
+            trees.forEach(tree => scene.remove(tree));
+            trees = [];
+            
+            const treeDensity = settings.plantDensity / 100;
+            const numTrees = Math.floor(treeDensity * 500);
+            
+            // Create different types of tropical trees
+            for (let i = 0; i < numTrees; i++) {
+                // Random position (avoid center area for village)
+                let x, z;
+                do {
+                    x = (Math.random() - 0.5) * 1800;
+                    z = (Math.random() - 0.5) * 1800;
+                } while (Math.sqrt(x*x + z*z) < 100);
+                
+                // Random tree type
+                const treeType = Math.floor(Math.random() * 3);
+                
+                switch(treeType) {
+                    case 0: 
+                        createPalmTree(x, 0, z);
+                        break;
+                    case 1:
+                        createBanyanTree(x, 0, z);
+                        break;
+                    case 2:
+                        createBushyTree(x, 0, z);
+                        break;
+                }
+            }
+            
+            // Add some undergrowth and small plants
+            for (let i = 0; i < numTrees * 3; i++) {
+                const x = (Math.random() - 0.5) * 1800;
+                const z = (Math.random() - 0.5) * 1800;
+                
+                if (Math.random() < 0.5) {
+                    createBush(x, 0, z);
+                } else {
+                    createFerns(x, 0, z);
+                }
+            }
+        }
+        
+        function createPalmTree(x, y, z) {
+            // Palm tree trunk
+            const trunkGeometry = new THREE.CylinderGeometry(2, 3, 30, 8);
+            const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+            const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+            trunk.position.set(x, y + 15, z);
+            trunk.castShadow = true;
+            scene.add(trunk);
+            
+            // Random trunk bend
+            trunk.rotation.x = (Math.random() - 0.5) * 0.2;
+            trunk.rotation.z = (Math.random() - 0.5) * 0.2;
+            
+            // Create palm fronds
+            const numFronds = 5 + Math.floor(Math.random() * 4);
+            
+            for (let i = 0; i < numFronds; i++) {
+                const angle = (i / numFronds) * Math.PI * 2;
+                const frondGeometry = new THREE.PlaneGeometry(20, 4);
+                
+                // Curve the frond geometry
+                const frondPositions = frondGeometry.attributes.position.array;
+                for (let j = 0; j < frondPositions.length; j += 3) {
+                    const x = frondPositions[j];
+                    const bendFactor = (x + 10) / 20; // 0 at start, 1 at end
+                    frondPositions[j + 1] -= Math.pow(bendFactor, 2) * 6;
+                }
+                
+                const frondMaterial = new THREE.MeshStandardMaterial({ 
+                    color: 0x2e8b57,
+                    side: THREE.DoubleSide 
+                });
+                
+                const frond = new THREE.Mesh(frondGeometry, frondMaterial);
+                frond.position.set(x, y + 30, z);
+                frond.rotation.y = angle;
+                frond.rotation.z = -Math.PI/4 + (Math.random() - 0.5) * 0.2;
+                frond.castShadow = true;
+                scene.add(frond);
+                
+                trees.push(frond);
+            }
+            
+            trees.push(trunk);
+        }
+        
+        function createBanyanTree(x, y, z) {
+            // Banyan tree with hanging roots
+            const trunkGeometry = new THREE.CylinderGeometry(8, 10, 40, 12);
+            const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x5d432c });
+            const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+            trunk.position.set(x, y + 20, z);
+            trunk.castShadow = true;
+            scene.add(trunk);
+            
+            // Main foliage
+            const foliageGeometry = new THREE.SphereGeometry(25, 16, 16);
+            const foliageMaterial = new THREE.MeshStandardMaterial({ color: 0x136207 });
+            const foliage = new THREE.Mesh(foliageGeometry, foliageMaterial);
+            foliage.position.set(x, y + 50, z);
+            foliage.castShadow = true;
+            scene.add(foliage);
+            
+            // Aerial roots
+            const numRoots = 5 + Math.floor(Math.random() * 5);
+            for (let i = 0; i < numRoots; i++) {
+                const angle = (i / numRoots) * Math.PI * 2;
+                const rootGeometry = new THREE.CylinderGeometry(1, 1, 30, 5);
+                const rootMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+                const root = new THREE.Mesh(rootGeometry, rootMaterial);
+                
+                const rootDistance = 15 + Math.random() * 5;
+                root.position.set(
+                    x + Math.cos(angle) * rootDistance, 
+                    y + 20, 
+                    z + Math.sin(angle) * rootDistance
+                );
+                
+                // Bend toward ground
+                root.rotation.x = Math.PI/15;
+                root.rotation.y = angle;
+                root.castShadow = true;
+                scene.add(root);
+                
+                trees.push(root);
+            }
+            
+            trees.push(trunk, foliage);
+        }
+        
+        function createBushyTree(x, y, z) {
+            // Simple bushy tropical tree
+            const height = 20 + Math.random() * 15;
+            
+            // Trunk
+            const trunkGeometry = new THREE.CylinderGeometry(2, 3, height, 8);
+            const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+            const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+            trunk.position.set(x, y + height/2, z);
+            trunk.castShadow = true;
+            scene.add(trunk);
+            
+            // Foliage (multiple overlapping spheres)
+            const numFoliageParts = 3 + Math.floor(Math.random() * 3);
+            
+            for (let i = 0; i < numFoliageParts; i++) {
+                const size = 8 + Math.random() * 8;
+                const foliageGeometry = new THREE.SphereGeometry(size, 8, 8);
+                const foliageMaterial = new THREE.MeshStandardMaterial({ 
+                    color: 0x228B22,
+                    metalness: 0.1,
+                    roughness: 0.8
+                });
+                
+                const foliage = new THREE.Mesh(foliageGeometry, foliageMaterial);
+                foliage.position.set(
+                    x + (Math.random() - 0.5) * 10,
+                    y + height - 5 + (Math.random() - 0.5) * 10,
+                    z + (Math.random() - 0.5) * 10
+                );
+                
+                foliage.castShadow = true;
+                scene.add(foliage);
+                
+                trees.push(foliage);
+            }
+            
+            trees.push(trunk);
+        }
+        
+        function createBush(x, y, z) {
+            const bushGeometry = new THREE.SphereGeometry(3 + Math.random() * 2, 8, 8);
+            const bushMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22 });
+            const bush = new THREE.Mesh(bushGeometry, bushMaterial);
+            bush.position.set(x, y + 1.5, z);
+            bush.castShadow = true;
+            scene.add(bush);
+            
+            trees.push(bush);
+        }
+        
+        function createFerns(x, y, z) {
+            const fernGroup = new THREE.Group();
+            const numFronds = 5 + Math.floor(Math.random() * 5);
+            
+            for (let i = 0; i < numFronds; i++) {
+                const angle = (i / numFronds) * Math.PI * 2;
+                
+                // Create a curved plane for each frond
+                const frondGeometry = new THREE.PlaneGeometry(5, 1, 10, 1);
+                
+                // Curve the frond
+                const positions = frondGeometry.attributes.position.array;
+                for (let j = 0; j < positions.length; j += 3) {
+                    const x = positions[j];
+                    const bendAmount = (x + 2.5) / 5; // Normalize to 0-1
+                    positions[j + 1] = Math.sin(bendAmount * Math.PI) * 2;
+                }
+                
+                const frondMaterial = new THREE.MeshStandardMaterial({ 
+                    color: 0x006400,
+                    side: THREE.DoubleSide
+                });
+                
+                const frond = new THREE.Mesh(frondGeometry, frondMaterial);
+                frond.rotation.y = angle;
+                frond.rotation.x = Math.PI/4 + (Math.random() - 0.5) * 0.2;
+                
+                fernGroup.add(frond);
+            }
+            
+            fernGroup.position.set(x, y + 1, z);
+            fernGroup.castShadow = true;
+            scene.add(fernGroup);
+            
+            trees.push(fernGroup);
+        }
+        
+        function createAnimals() {
+            // Create different animals around the forest
+            
+            // Birds flying in the sky
+            for (let i = 0; i < 20; i++) {
+                createBird(
+                    (Math.random() - 0.5) * 1000,
+                    100 + Math.random() * 100,
+                    (Math.random() - 0.5) * 1000
+                );
+            }
+            
+            // Ground animals
+            for (let i = 0; i < 15; i++) {
+                const x = (Math.random() - 0.5) * 1500;
+                const z = (Math.random() - 0.5) * 1500;
+                
+                if (Math.random() < 0.3) {
+                    createMonkey(x, 0, z);
+                } else if (Math.random() < 0.6) {
+                    createJaguar(x, 0, z);
+                } else {
+                    createTapir(x, 0, z);
+                }
+            }
+        }
+        
+        function createBird(x, y, z) {
+            // Simple bird with animated wings
+            const bodyGeometry = new THREE.SphereGeometry(2, 8, 8);
+            bodyGeometry.scale(1, 0.6, 1.5);
+            
+            const birdColor = Math.random() < 0.5 ? 0xcc0000 : 0x0066cc;
+            const bodyMaterial = new THREE.MeshStandardMaterial({ color: birdColor });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            
+            // Wings
+            const leftWing = createWing();
+            leftWing.position.set(3, 0, 0);
+            
+            const rightWing = createWing();
+            rightWing.position.set(-3, 0, 0);
+            rightWing.rotation.z = Math.PI;
+            
+            // Head
+            const headGeometry = new THREE.SphereGeometry(1, 8, 8);
+            const headMaterial = new THREE.MeshStandardMaterial({ color: birdColor });
+            const head = new THREE.Mesh(headGeometry, headMaterial);
+            head.position.set(0, 0, 2);
+            
+            // Beak
+            const beakGeometry = new THREE.ConeGeometry(0.5, 2, 8);
+            beakGeometry.rotateX(Math.PI/2);
+            const beakMaterial = new THREE.MeshStandardMaterial({ color: 0xffcc00 });
+            const beak = new THREE.Mesh(beakGeometry, beakMaterial);
+            beak.position.set(0, 0, 3);
+            
+            // Group all parts
+            const bird = new THREE.Group();
+            bird.add(body, leftWing, rightWing, head, beak);
+            bird.position.set(x, y, z);
+            
+            // Random initial rotation
+            bird.rotation.y = Math.random() * Math.PI * 2;
+            
+            scene.add(bird);
+            
+            // Store with animation data
+            animals.push({
+                mesh: bird,
+                type: 'bird',
+                wings: { left: leftWing, right: rightWing },
+                flapSpeed: 0.1 + Math.random() * 0.2,
+                flapPhase: Math.random() * Math.PI * 2,
+                speed: 0.5 + Math.random() * 0.5,
+                direction: new THREE.Vector3(
+                    Math.random() - 0.5,
+                    (Math.random() - 0.5) * 0.2,
+                    Math.random() - 0.5
+                ).normalize()
+            });
+            
+            function createWing() {
+                const wingGeometry = new THREE.PlaneGeometry(6, 4);
+                const wingMaterial = new THREE.MeshStandardMaterial({ 
+                    color: birdColor,
+                    side: THREE.DoubleSide
+                });
+                return new THREE.Mesh(wingGeometry, wingMaterial);
+            }
+        }
+        
+        function createMonkey(x, y, z) {
+            // Simple monkey
+            const bodyGeometry = new THREE.SphereGeometry(3, 8, 8);
+            bodyGeometry.scale(0.7, 1, 1);
+            const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            
+            // Head
+            const headGeometry = new THREE.SphereGeometry(2, 8, 8);
+            const headMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+            const head = new THREE.Mesh(headGeometry, headMaterial);
+            head.position.set(0, 4, 1);
+            
+            // Face
+            const faceGeometry = new THREE.SphereGeometry(1.5, 8, 8);
+            const faceMaterial = new THREE.MeshStandardMaterial({ color: 0xE3B095 });
+            const face = new THREE.Mesh(faceGeometry, faceMaterial);
+            face.position.set(0, 4, 2);
+            face.scale.set(0.8, 0.8, 0.5);
+            
+            // Limbs
+            const limbs = [];
+            for (let i = 0; i < 4; i++) {
+                const isArm = i < 2;
+                const limbGeometry = new THREE.CylinderGeometry(
+                    0.7, 0.7, isArm ? 6 : 8, 8
+                );
+                
+                const limbMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+                const limb = new THREE.Mesh(limbGeometry, limbMaterial);
+                
+                if (isArm) {
+                    limb.position.set(i === 0 ? 2 : -2, 2, 0);
+                    limb.rotation.z = i === 0 ? Math.PI/4 : -Math.PI/4;
+                } else {
+                    limb.position.set(i === 2 ? 1 : -1, -2, 0);
+                    limb.rotation.z = i === 2 ? -Math.PI/8 : Math.PI/8;
+                }
+                
+                limbs.push(limb);
+            }
+            
+            // Tail
+            const tailGeometry = new THREE.CylinderGeometry(0.5, 0.2, 10, 8);
+            tailGeometry.applyMatrix4(new THREE.Matrix4().makeTranslation(0, -5, 0));
+            const tailMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+            const tail = new THREE.Mesh(tailGeometry, tailMaterial);
+            tail.position.set(0, -2, -3);
+            tail.rotation.x = Math.PI/4;
+            
+            // Combine all parts
+            const monkey = new THREE.Group();
+            monkey.add(body, head, face, tail, ...limbs);
+            
+            // Position monkey
+            monkey.position.set(x, y + 20, z); // Position it in a tree
+            monkey.rotation.y = Math.random() * Math.PI * 2;
+            
+            scene.add(monkey);
+            
+            animals.push({
+                mesh: monkey,
+                type: 'monkey',
+                speed: 0.2,
+                direction: new THREE.Vector3(
+                    Math.random() - 0.5,
+                    0,
+                    Math.random() - 0.5
+                ).normalize(),
+                limbs: limbs,
+                tail: tail,
+                animationPhase: Math.random() * Math.PI * 2
+            });
+        }
+        
+        function createJaguar(x, y, z) {
+            // Simple jaguar/tiger
+            const bodyGeometry = new THREE.SphereGeometry(4, 8, 8);
+            bodyGeometry.scale(1.5, 1, 2);
+            const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xCCA63D });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            
+            // Head
+            const headGeometry = new THREE.SphereGeometry(2.5, 8, 8);
+            const headMaterial = new THREE.MeshStandardMaterial({ color: 0xCCA63D });
+            const head = new THREE.Mesh(headGeometry, headMaterial);
+            head.position.set(0, 2, 7);
+            
+            // Legs
+            const legs = [];
+            for (let i = 0; i < 4; i++) {
+                const legGeometry = new THREE.CylinderGeometry(1, 0.8, 8, 8);
+                const legMaterial = new THREE.MeshStandardMaterial({ color: 0xCCA63D });
+                const leg = new THREE.Mesh(legGeometry, legMaterial);
+                
+                const side = i % 2 === 0 ? 3 : -3;
+                const front = i < 2 ? 4 : -4;
+                
+                leg.position.set(side, -4, front);
+                legs.push(leg);
+            }
+            
+            // Tail
+            const tailGeometry = new THREE.CylinderGeometry(0.8, 0.3, 10, 8);
+            tailGeometry.applyMatrix4(new THREE.Matrix4().makeTranslation(0, -5, 0));
+            const tailMaterial = new THREE.MeshStandardMaterial({ color: 0xCCA63D });
+            const tail = new THREE.Mesh(tailGeometry, tailMaterial);
+            tail.position.set(0, 0, -7);
+            tail.rotation.x = -Math.PI/4;
+            
+            // Combine all parts
+            const jaguar = new THREE.Group();
+            jaguar.add(body, head, tail, ...legs);
+            
+            // Position jaguar on the ground
+            jaguar.position.set(x, y + 8, z);
+            jaguar.rotation.y = Math.random() * Math.PI * 2;
+            
+            scene.add(jaguar);
+            
+            animals.push({
+                mesh: jaguar,
+                type: 'jaguar',
+                speed: 0.4 + Math.random() * 0.3,
+                direction: new THREE.Vector3(
+                    Math.random() - 0.5,
+                    0,
+                    Math.random() - 0.5
+                ).normalize(),
+                legs: legs,
+                tail: tail,
+                animationPhase: Math.random() * Math.PI * 2
+            });
+        }
+        
+        function createTapir(x, y, z) {
+            // Simple tapir (similar to a small, round elephant)
+            const bodyGeometry = new THREE.SphereGeometry(5, 8, 8);
+            bodyGeometry.scale(1, 0.8, 1.5);
+            const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            
+            // Head
+            const headGeometry = new THREE.SphereGeometry(3, 8, 8);
+            headGeometry.scale(0.8, 0.8, 1.2);
+            const headMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
+            const head = new THREE.Mesh(headGeometry, headMaterial);
+            head.position.set(0, 0, 7);
+            
+            // Snout
+            const snoutGeometry = new THREE.CylinderGeometry(1, 1.5, 4, 8);
+            snoutGeometry.rotateX(Math.PI/2);
+            const snoutMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
+            const snout = new THREE.Mesh(snoutGeometry, snoutMaterial);
+            snout.position.set(0, -1, 9);
+            
+            // Legs
+            const legs = [];
+            for (let i = 0; i < 4; i++) {
+                const legGeometry = new THREE.CylinderGeometry(1, 1, 6, 8);
+                const legMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
+                const leg = new THREE.Mesh(legGeometry, legMaterial);
+                
+                const side = i % 2 === 0 ? 3 : -3;
+                const front = i < 2 ? 4 : -4;
+                
+                leg.position.set(side, -4, front);
+                legs.push(leg);
+            }
+            
+            // Combine all parts
+            const tapir = new THREE.Group();
+            tapir.add(body, head, snout, ...legs);
+            
+            // Position tapir on the ground
+            tapir.position.set(x, y + 7, z);
+            tapir.rotation.y = Math.random() * Math.PI * 2;
+            
+            scene.add(tapir);
+            
+            animals.push({
+                mesh: tapir,
+                type: 'tapir',
+                speed: 0.2 + Math.random() * 0.2,
+                direction: new THREE.Vector3(
+                    Math.random() - 0.5,
+                    0,
+                    Math.random() - 0.5
+                ).normalize(),
+                legs: legs,
+                animationPhase: Math.random() * Math.PI * 2
+            });
+        }
+        
+        function createSettlement() {
+            // Clear existing huts
+            huts.forEach(hut => scene.remove(hut));
+            huts = [];
+            
+            // Create human settlement based on population setting
+            const numHuts = Math.max(3, Math.floor(settings.population / 10));
+            
+            // Create central gathering area with fire pit
+            createFirePit(0, 0, 0);
+            
+            // Arrange huts in a circle around the central fire
+            for (let i = 0; i < numHuts; i++) {
+                const angle = (i / numHuts) * Math.PI * 2;
+                const radius = 40 + Math.random() * 20;
+                
+                const x = Math.cos(angle) * radius;
+                const z = Math.sin(angle) * radius;
+                
+                createHut(x, 0, z);
+            }
+            
+            // Create some people
+            const numPeople = Math.floor(settings.population / 5);
+            
+            for (let i = 0; i < numPeople; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const radius = Math.random() * 60;
+                
+                createPerson(
+                    Math.cos(angle) * radius,
+                    0,
+                    Math.sin(angle) * radius
+                );
+            }
+        }
+        
+        function createHut(x, y, z) {
+            // Create a tropical hut with thatched roof
+            const baseDiameter = 15 + Math.random() * 5;
+            const height = 10 + Math.random() * 5;
+            
+            // Base/walls (cylinder)
+            const baseGeometry = new THREE.CylinderGeometry(
+                baseDiameter/2, baseDiameter/2, height, 16
+            );
+            const baseMaterial = new THREE.MeshStandardMaterial({ color: 0xA0522D });
+            const base = new THREE.Mesh(baseGeometry, baseMaterial);
+            base.position.set(x, y + height/2, z);
+            base.castShadow = true;
+            base.receiveShadow = true;
+            
+            // Thatched roof (cone)
+            const roofGeometry = new THREE.ConeGeometry(
+                baseDiameter/2 + 5, height * 0.8, 16
+            );
+            const roofMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+            const roof = new THREE.Mesh(roofGeometry, roofMaterial);
+            roof.position.set(x, y + height + height*0.4, z);
+            roof.castShadow = true;
+            
+            // Door
+            const doorWidth = 4;
+            const doorHeight = 7;
+            const doorGeometry = new THREE.PlaneGeometry(doorWidth, doorHeight);
+            const doorMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x8B4513,
+                side: THREE.DoubleSide
+            });
+            const door = new THREE.Mesh(doorGeometry, doorMaterial);
+            
+            // Position door on a random side of the hut
+            const doorAngle = Math.random() * Math.PI * 2;
+            door.position.set(
+                x + Math.cos(doorAngle) * (baseDiameter/2 + 0.1),
+                y + doorHeight/2,
+                z + Math.sin(doorAngle) * (baseDiameter/2 + 0.1)
+            );
+            door.rotation.y = doorAngle + Math.PI/2;
+            
+            // Create a torch next to the door
+            createTorch(
+                x + Math.cos(doorAngle) * (baseDiameter/2 + 2),
+                y,
+                z + Math.sin(doorAngle) * (baseDiameter/2 + 2)
+            );
+            
+            // Group the hut parts
+            const hut = new THREE.Group();
+            hut.add(base, roof, door);
+            scene.add(hut);
+            
+            huts.push(hut);
+        }
+        
+        function createFirePit(x, y, z) {
+            // Create a central fire pit
+            
+            // Stone circle
+            const stoneRing = new THREE.Group();
+            const numStones = 12;
+            
+            for (let i = 0; i < numStones; i++) {
+                const angle = (i / numStones) * Math.PI * 2;
+                const stoneGeometry = new THREE.SphereGeometry(2, 6, 6);
+                stoneGeometry.scale(1, 0.7, 1);
+                
+                const stoneMaterial = new THREE.MeshStandardMaterial({ 
+                    color: 0x888888,
+                    roughness: 1
+                });
+                
+                const stone = new THREE.Mesh(stoneGeometry, stoneMaterial);
+                stone.position.set(
+                    Math.cos(angle) * 10,
+                    2,
+                    Math.sin(angle) * 10
+                );
+                
+                stoneRing.add(stone);
+            }
+            
+            // Fire logs
+            const logs = new THREE.Group();
+            for (let i = 0; i < 5; i++) {
+                const angle = (i / 5) * Math.PI;
+                const logGeometry = new THREE.CylinderGeometry(1, 1, 8, 8);
+                const logMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+                const log = new THREE.Mesh(logGeometry, logMaterial);
+                
+                log.position.set(
+                    Math.cos(angle) * 3,
+                    1 + i % 2,
+                    Math.sin(angle) * 3
+                );
+                log.rotation.x = Math.PI/2;
+                log.rotation.z = angle;
+                
+                logs.add(log);
+            }
+            
+            // Fire (animated in update loop)
+            const fireGeometry = new THREE.ConeGeometry(5, 10, 8, 1, true);
+            const fireMaterial = new THREE.MeshBasicMaterial({ 
+                color: 0xff6600,
+                transparent: true,
+                opacity: 0.8
+            });
+            
+            const fire = new THREE.Mesh(fireGeometry, fireMaterial);
+            fire.position.y = 5;
+            
+            // Fire light
+            const fireLight = new THREE.PointLight(0xff6600, 2, 100, 2);
+            fireLight.position.set(0, 10, 0);
+            
+            // Assemble fire pit
+            const firePit = new THREE.Group();
+            firePit.add(stoneRing, logs, fire, fireLight);
+            firePit.position.set(x, y, z);
+            
+            scene.add(firePit);
+            
+            // Add to torches array for animation
+            torches.push({
+                light: fireLight,
+                flame: fire,
+                initialIntensity: 2,
+                flickerSpeed: 0.1
+            });
+        }
+        
+        function createTorch(x, y, z) {
+            // Create a torch with flame
+            const poleGeometry = new THREE.CylinderGeometry(0.5, 0.5, 15, 8);
+            const poleMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+            const pole = new THREE.Mesh(poleGeometry, poleMaterial);
+            pole.position.y = 7.5;
+            
+            const holderGeometry = new THREE.CylinderGeometry(2, 1, 3, 8);
+            const holderMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+            const holder = new THREE.Mesh(holderGeometry, holderMaterial);
+            holder.position.y = 15;
+            
+            // Flame
+            const flameGeometry = new THREE.ConeGeometry(2, 5, 8, 1, true);
+            const flameMaterial = new THREE.MeshBasicMaterial({ 
+                color: 0xff6600,
+                transparent: true,
+                opacity: 0.8
+            });
+            
+            const flame = new THREE.Mesh(flameGeometry, flameMaterial);
+            flame.position.y = 18;
+            
+            // Light
+            const light = new THREE.PointLight(0xff6600, 1, 30, 2);
+            light.position.y = 18;
+            
+            // Group
+            const torch = new THREE.Group();
+            torch.add(pole, holder, flame, light);
+            torch.position.set(x, y, z);
+            
+            scene.add(torch);
+            
+            // Add to torches array for animation
+            torches.push({
+                light: light,
+                flame: flame,
+                initialIntensity: 1,
+                flickerSpeed: 0.15 + Math.random() * 0.1
+            });
+        }
+        
+        function createPerson(x, y, z) {
+            // Create a simple human figure
+            const bodyGeometry = new THREE.CylinderGeometry(1, 1, 5, 8);
+            const skinColor = 0xC68642; // Tan skin tone
+            const bodyMaterial = new THREE.MeshStandardMaterial({ color: skinColor });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            body.position.y = 2.5;
+            
+            // Head
+            const headGeometry = new THREE.SphereGeometry(1, 8, 8);
+            const headMaterial = new THREE.MeshStandardMaterial({ color: skinColor });
+            const head = new THREE.Mesh(headGeometry, headMaterial);
+            head.position.y = 6;
+            
+            // Limbs
+            const limbs = [];
+            
+            // Arms
+            for (let i = 0; i < 2; i++) {
+                const armGeometry = new THREE.CylinderGeometry(0.5, 0.5, 4, 8);
+                const armMaterial = new THREE.MeshStandardMaterial({ color: skinColor });
+                const arm = new THREE.Mesh(armGeometry, armMaterial);
+                
+                arm.position.set(i === 0 ? 2 : -2, 4, 0);
+                arm.rotation.z = i === 0 ? Math.PI/3 : -Math.PI/3;
+                
+                limbs.push(arm);
+            }
+            
+            // Legs
+            for (let i = 0; i < 2; i++) {
+                const legGeometry = new THREE.CylinderGeometry(0.6, 0.6, 4, 8);
+                const legMaterial = new THREE.MeshStandardMaterial({ color: skinColor });
+                const leg = new THREE.Mesh(legGeometry, legMaterial);
+                
+                leg.position.set(i === 0 ? 0.8 : -0.8, 0, 0);
+                
+                limbs.push(leg);
+            }
+            
+            // Clothing - simple wrap
+            const clothingGeometry = new THREE.CylinderGeometry(1.1, 1.5, 3, 8);
+            
+            // Random clothing color
+            const clothingColors = [0xf44336, 0x4CAF50, 0x2196F3, 0xFFC107];
+            const clothingColor = clothingColors[Math.floor(Math.random() * clothingColors.length)];
+            
+            const clothingMaterial = new THREE.MeshStandardMaterial({ color: clothingColor });
+            const clothing = new THREE.Mesh(clothingGeometry, clothingMaterial);
+            clothing.position.y = 2;
+            
+            // Group everything
+            const person = new THREE.Group();
+            person.add(body, head, clothing, ...limbs);
+            person.position.set(x, y + 2, z);
+            person.rotation.y = Math.random() * Math.PI * 2;
+            
+            scene.add(person);
+            
+            // Add to animals array for animation (using same system)
+            animals.push({
+                mesh: person,
+                type: 'person',
+                speed: 0.05 + Math.random() * 0.05,
+                direction: new THREE.Vector3(
+                    Math.random() - 0.5,
+                    0,
+                    Math.random() - 0.5
+                ).normalize(),
+                limbs: limbs,
+                animationPhase: Math.random() * Math.PI * 2
+            });
+        }
+        
+        function setupWeatherSystems() {
+            // Setup rain particle system (initially disabled)
+            const rainGeometry = new THREE.BufferGeometry();
+            const rainVertices = [];
+            const rainVelocities = [];
+            
+            for (let i = 0; i < 5000; i++) {
+                // Random position in a box above the scene
+                rainVertices.push(
+                    (Math.random() - 0.5) * 1000,
+                    300 + Math.random() * 200,
+                    (Math.random() - 0.5) * 1000
+                );
+                
+                // Velocity (mostly downward)
+                rainVelocities.push(
+                    (Math.random() - 0.5) * 0.2,
+                    -5 - Math.random() * 5,
+                    (Math.random() - 0.5) * 0.2
+                );
+            }
+            
+            rainGeometry.setAttribute('position', new THREE.Float32BufferAttribute(rainVertices, 3));
+            rainGeometry.setAttribute('velocity', new THREE.Float32BufferAttribute(rainVelocities, 3));
+            
+            const rainMaterial = new THREE.PointsMaterial({
+                color: 0xaaaaaa,
+                size: 0.5,
+                transparent: true,
+                opacity: 0.6
+            });
+            
+            rainParticles = new THREE.Points(rainGeometry, rainMaterial);
+            rainParticles.visible = false;
+            scene.add(rainParticles);
+        }
+        
+        function updateWeather() {
+            // Update weather effects based on current setting
+            const weather = settings.weather;
+            
+            // Reset all weather effects
+            rainParticles.visible = false;
+            scene.fog = null;
+            
+            switch (weather) {
+                case 'clear':
+                    // Clear weather - no fog, no rain
+                    break;
+                    
+                case 'cloudy':
+                    // Cloudy - light fog
+                    scene.fog = new THREE.FogExp2(0xcccccc, 0.0008);
+                    sky.material.color.set(0xaaaaaa);
+                    break;
+                    
+                case 'rainy':
+                    // Rain - show rain particles, fog, darker sky
+                    rainParticles.visible = true;
+                    scene.fog = new THREE.FogExp2(0x999999, 0.001);
+                    sky.material.color.set(0x666666);
+                    break;
+                    
+                case 'foggy':
+                    // Heavy fog
+                    scene.fog = new THREE.FogExp2(0xcccccc, 0.005);
+                    sky.material.color.set(0xdddddd);
+                    break;
+            }
+        }
+        
+        function updateLighting() {
+            // Make sure sky exists before accessing it
+            if (!sky) return;
+            
+            // Update lighting based on time of day
+            const time = settings.timeOfDay;
+            
+            // Calculate sun position based on time (0-24)
+            const sunAngle = ((time - 6) / 24) * Math.PI * 2;
+            const sunHeight = Math.sin(sunAngle);
+            
+            // Position sun
+            directionalLight.position.set(
+                Math.cos(sunAngle) * 100,
+                Math.max(0, sunHeight) * 100,
+                Math.sin(sunAngle) * 100
+            );
+            
+            // Determine if it's day or night
+            const isDay = sunHeight > 0;
+            
+            // Update light intensity based on time
+            const sunIntensity = Math.max(0, sunHeight);
+            directionalLight.intensity = sunIntensity;
+            
+            // Adjust ambient light
+            ambientLight.intensity = isDay ? 0.5 : 0.05;
+            
+            // Update sky color based on time
+            if (isDay) {
+                // Day cycle from dawn blue to midday blue to sunset orange
+                if (time < 8 || time > 18) {
+                    // Dawn/sunset - orangish
+                    const t = time < 12 ? (time - 6) / 2 : (22 - time) / 4;
+                    sky.material.color.setRGB(
+                        0.8 + t * 0.2,
+                        0.7 + t * 0.3,
+                        0.5 + t * 0.5
+                    );
+                } else {
+                    // Day - blue
+                    sky.material.color.set(0x87CEEB);
+                }
+            } else {
+                // Night - dark blue
+                sky.material.color.set(0x0a1a3a);
+            }
+            
+            // Adjust torch brightness - brighter at night
+            const torchBrightness = isDay ? 0.7 : 1.0;
+            
+            torches.forEach(torch => {
+                if (torch && torch.light) {
+                    torch.light.intensity = torch.initialIntensity * torchBrightness;
+                }
+            });
+        }
+        
+        function setupUIControls() {
+            // Plant density slider
+            const plantDensitySlider = document.getElementById('plantDensity');
+            const plantDensityValue = document.getElementById('plantDensityValue');
+            
+            plantDensitySlider.addEventListener('input', function() {
+                settings.plantDensity = parseInt(this.value);
+                plantDensityValue.textContent = `${settings.plantDensity}%`;
+                createForest();
+            });
+            
+            // Time of day slider
+            const timeOfDaySlider = document.getElementById('timeOfDay');
+            const timeOfDayValue = document.getElementById('timeOfDayValue');
+            
+            timeOfDaySlider.addEventListener('input', function() {
+                settings.timeOfDay = parseFloat(this.value);
+                const hours = Math.floor(settings.timeOfDay);
+                const minutes = Math.floor((settings.timeOfDay - hours) * 60);
+                timeOfDayValue.textContent = `${hours}:${minutes.toString().padStart(2, '0')}`;
+                updateLighting();
+            });
+            
+            // Population slider
+            const populationSlider = document.getElementById('population');
+            const populationValue = document.getElementById('populationValue');
+            
+            populationSlider.addEventListener('input', function() {
+                settings.population = parseInt(this.value);
+                populationValue.textContent = `${settings.population}%`;
+                createSettlement();
+            });
+            
+            // Weather select
+            const weatherSelect = document.getElementById('weather');
+            
+            weatherSelect.addEventListener('change', function() {
+                settings.weather = this.value;
+                updateWeather();
+            });
+        }
+        
+        function updateParticles() {
+            // Update rain particles
+            if (rainParticles && rainParticles.visible) {
+                const positions = rainParticles.geometry.attributes.position.array;
+                const velocities = rainParticles.geometry.attributes.velocity.array;
+                
+                for (let i = 0; i < positions.length; i += 3) {
+                    // Update position
+                    positions[i] += velocities[i];
+                    positions[i + 1] += velocities[i + 1];
+                    positions[i + 2] += velocities[i + 2];
+                    
+                    // Reset particles that go below ground
+                    if (positions[i + 1] < 0) {
+                        positions[i] = (Math.random() - 0.5) * 1000;
+                        positions[i + 1] = 300 + Math.random() * 200;
+                        positions[i + 2] = (Math.random() - 0.5) * 1000;
+                    }
+                }
+                
+                rainParticles.geometry.attributes.position.needsUpdate = true;
+            }
+            
+            // Animate water particles
+            for (let i = 0; i < waterObjects.length; i++) {
+                const water = waterObjects[i];
+                
+                if (water && water.type === 'Points') {
+                    // Waterfall particles
+                    const positions = water.geometry.attributes.position.array;
+                    const velocities = water.geometry.attributes.velocity.array;
+                    
+                    for (let j = 0; j < positions.length; j += 3) {
+                        // Update position
+                        positions[j] += velocities[j];
+                        positions[j + 1] += velocities[j + 1];
+                        positions[j + 2] += velocities[j + 2];
+                        
+                        // Accelerate downward (gravity)
+                        velocities[j + 1] -= 0.01;
+                        
+                        // Reset particles that go below ground
+                        if (positions[j + 1] < 5) {
+                            // Find the original x,z position from the particle index
+                            const particleIndex = Math.floor(j / 3);
+                            const waterfall = waterObjects[i-1]; // Assumption: waterfall mesh comes before particles
+                            
+                            if (waterfall) {
+                                positions[j] = waterfall.position.x + (Math.random() - 0.5) * 20;
+                                positions[j + 1] = waterfall.position.y + 40;
+                                positions[j + 2] = waterfall.position.z + (Math.random() - 0.5) * 2;
+                                
+                                // Reset velocity
+                                velocities[j] = (Math.random() - 0.5) * 0.2;
+                                velocities[j + 1] = -Math.random() * 0.5 - 0.5;
+                                velocities[j + 2] = (Math.random() - 0.5) * 0.2;
+                            }
+                        }
+                    }
+                    
+                    water.geometry.attributes.position.needsUpdate = true;
+                }
+            }
+        }
+        
+        function updateAnimals() {
+            // Update animal positions and animations
+            const delta = clock.getDelta();
+            
+            animals.forEach(animal => {
+                if (!animal || !animal.mesh) return;
+                
+                switch(animal.type) {
+                    case 'bird':
+                        // Update bird position
+                        animal.mesh.position.add(animal.direction.clone().multiplyScalar(animal.speed));
+                        
+                        // Flap wings
+                        if (animal.wings && animal.wings.left && animal.wings.right) {
+                            animal.flapPhase += animal.flapSpeed;
+                            const flapAmount = Math.sin(animal.flapPhase) * Math.PI/4;
+                            animal.wings.left.rotation.z = flapAmount;
+                            animal.wings.right.rotation.z = -flapAmount;
+                        }
+                        
+                        // Make bird face direction of travel
+                        animal.mesh.lookAt(
+                            animal.mesh.position.clone().add(animal.direction)
+                        );
+                        
+                        // Occasionally change direction
+                        if (Math.random() < 0.01) {
+                            animal.direction.set(
+                                Math.random() - 0.5,
+                                (Math.random() - 0.5) * 0.2,
+                                Math.random() - 0.5
+                            ).normalize();
+                        }
+                        
+                        // Keep within bounds
+                        if (animal.mesh.position.length() > 900) {
+                            animal.direction.negate();
+                        }
+                        break;
+                        
+                    case 'monkey':
+                    case 'jaguar':
+                    case 'tapir':
+                    case 'person':
+                        // Update position
+                        animal.mesh.position.add(animal.direction.clone().multiplyScalar(animal.speed));
+                        
+                        // Make animal face direction of travel
+                        animal.mesh.lookAt(
+                            animal.mesh.position.clone().add(animal.direction)
+                        );
+                        
+                        // Animate limbs for walking
+                        if (animal.limbs) {
+                            animal.animationPhase += animal.speed * 5;
+                            
+                            // Different animation for different animals
+                            if (animal.type === 'monkey' || animal.type === 'person') {
+                                // Swing arms and legs
+                                for (let i = 0; i < animal.limbs.length; i++) {
+                                    const limb = animal.limbs[i];
+                                    if (!limb) continue;
+                                    
+                                    const angle = Math.sin(animal.animationPhase + i * Math.PI) * 0.2;
+                                    
+                                    if (i < 2) {
+                                        // Arms
+                                        limb.rotation.x = angle;
+                                    } else {
+                                        // Legs
+                                        limb.rotation.x = angle;
+                                    }
+                                }
+                            } else {
+                                // Four-legged animals
+                                for (let i = 0; i < animal.limbs.length; i++) {
+                                    const limb = animal.limbs[i];
+                                    if (!limb) continue;
+                                    
+                                    // Diagonal pairs move together
+                                    const phase = i === 0 || i === 3 ? 0 : Math.PI;
+                                    const angle = Math.sin(animal.animationPhase + phase) * 0.2;
+                                    limb.rotation.x = angle;
+                                }
+                            }
+                            
+                            // Animate tail if present
+                            if (animal.tail) {
+                                animal.tail.rotation.y = Math.sin(animal.animationPhase * 0.5) * 0.3;
+                            }
+                        }
+                        
+                        // Occasionally change direction
+                        if (Math.random() < 0.005) {
+                            animal.direction.set(
+                                Math.random() - 0.5,
+                                0,
+                                Math.random() - 0.5
+                            ).normalize();
+                        }
+                        
+                        // Keep within bounds
+                        if (animal.mesh.position.length() > 500) {
+                            animal.direction.negate();
+                        }
+                        
+                        // Keep people near the village
+                        if (animal.type === 'person' && animal.mesh.position.length() > 100) {
+                            animal.direction.set(
+                                -animal.mesh.position.x,
+                                0,
+                                -animal.mesh.position.z
+                            ).normalize();
+                        }
+                        break;
+                }
+            });
+        }
+        
+        function updateTorches() {
+            // Animate torch flames and lights
+            torches.forEach(torch => {
+                if (!torch || !torch.flame || !torch.light) return;
+                
+                // Flicker the flames
+                const time = Date.now() * 0.001;
+                const flicker = Math.sin(time * torch.flickerSpeed * 10) * 0.1 + 0.9;
+                
+                torch.flame.scale.set(flicker, 1 + (1-flicker), flicker);
+                torch.light.intensity = torch.initialIntensity * flicker;
+            });
+        }
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // Update controls
+            controls.update();
+            
+            // Update particles
+            updateParticles();
+            
+            // Update animals
+            updateAnimals();
+            
+            // Update torches
+            updateTorches();
+            
+            // Render scene
+            renderer.render(scene, camera);
+        }
+        
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+        
+        // Simple noise function for terrain
+        function simplex(x, z) {
+            // Simple implementation of Simplex-like noise
+            // Not as good as a proper noise library, but sufficient for this demo
+            return Math.sin(x * 0.1) * Math.cos(z * 0.1) * 0.5 + 
+                   Math.sin(x * 0.2 + z * 0.3) * 0.25 +
+                   Math.cos(x * 0.5 + z * 0.2) * 0.25;
+        }
+        
+        // Initialize the scene
+        init();
+    </script>
+</body>
+</html>
